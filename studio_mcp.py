@@ -268,6 +268,45 @@ def review_scope(project, binding):
     return {**scope, "binding": binding}
 
 
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, untrustedContentHint=True))
+def localhub_list_reference_images(project: str) -> dict:
+    """List project image identifiers, revisions and hashes. Ask the creator when multiple artworks fit."""
+    if database:
+        from localhub_references import list_references
+        return {"references": list_references(ProjectDatabase(database), project)}
+    return bridge("references", project)
+
+
+@mcp.tool(annotations=ToolAnnotations(destructiveHint=False, idempotentHint=True))
+def localhub_register_reference_image(project: str, asset_id: str, filename: str) -> dict:
+    """Register an image already staged under input/localhub_media. Use its relative filename.
+
+    Registration creates a project image version. Brand approval requires a separate human instruction.
+    """
+    return bridge("references", project, dict(project=project, asset_id=asset_id, file=filename), method="POST")["reference"]
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
+def localhub_read_reference_image(project: str, reference: dict) -> ImageContent:
+    """Show an exact registered artwork image in chat. Pass its asset_id, revision and, when known, sha256."""
+    result = bridge("references/read", project, reference, method="POST", timeout=120)
+    return ImageContent(type="image", mimeType=result["mime_type"], data=result["data"])
+
+
+@mcp.tool(annotations=ToolAnnotations(destructiveHint=False, idempotentHint=True))
+def localhub_link_review_artwork(project: str, source_binding: str, annotation: dict, reference: dict,
+                                approved_by: str, approval_record: str, expected_version: int) -> dict:
+    """Pin a brand-approved artwork revision to the exact saved master note, including its region.
+
+    Use the actual approver and their confirmation supplied by the creator. Never infer approval from
+    an upload, screenshot, or visual resemblance. Use 0 for the first link, then the latest artwork_history
+    version of this note. Replacing the reference preserves the previous approval record.
+    """
+    payload = dict(source_binding=source_binding, annotation=annotation, reference=reference, approved_by=approved_by,
+                   approval_record=approval_record, expected_version=expected_version)
+    return bridge("deliveries/master-review/artwork", project, payload, method="POST", timeout=120)["artwork"]
+
+
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
 def localhub_read_master_frame(project: str, binding: str, frame: int, region: list[float] | None = None) -> ImageContent:
     """View a checked master frame, or its native-pixel region, in chat. Frames start at zero.
@@ -308,31 +347,34 @@ def localhub_read_job(project: str, job_id: str) -> dict:
 
 @mcp.tool(annotations=ToolAnnotations(destructiveHint=False, idempotentHint=True))
 def localhub_submit_master_fix(project: str, source_binding: str, annotation: dict, target_binding: str,
-                               target_frame: int, comment: str, expected_version: int) -> dict:
+                               target_frame: int, comment: str, expected_version: int, artwork_version: int | None = None) -> dict:
     """Link an original saved note to the actual revised master/frame and describe the change.
 
     Use the exact annotation including region from list_master_reviews. Use expected_version=0
     for its first event, otherwise the latest event version. Submission leaves the fix pending review.
+    If artwork is linked, view the reference and pass the latest artwork_history version for this exact note.
     """
     payload = dict(source_binding=source_binding, annotation=annotation, target_binding=target_binding,
-                   target_frame=target_frame, comment=comment, expected_version=expected_version, state="submitted")
+                   target_frame=target_frame, comment=comment, expected_version=expected_version, state="submitted",
+                   artwork_version=artwork_version)
     return bridge("deliveries/master-review/followup", project, payload, method="POST", timeout=120)["event"]
 
 
 @mcp.tool(annotations=ToolAnnotations(destructiveHint=False, idempotentHint=True))
 def localhub_record_master_verdict(project: str, source_binding: str, annotation: dict, target_binding: str,
                                    target_frame: int, expected_version: int, decision: str, reviewer: str,
-                                   comment: str) -> dict:
+                                   comment: str, artwork_version: int | None = None) -> dict:
     """Record a human reviewer's explicit decision on this pending fix: accepted or changes_requested.
 
     Show the relevant frames with read_master_frame. Wait for the human's verdict and use their feedback
     and name or handle. A successful render, test or the assistant's own opinion is never a human verdict.
+    When artwork is linked, pass the artwork_version used for the submitted fix.
     """
     if decision not in ("accepted", "changes_requested"):
         raise ValueError("请选择接受本次修改或继续修改")
     payload = dict(source_binding=source_binding, annotation=annotation, target_binding=target_binding,
                    target_frame=target_frame, expected_version=expected_version, state=decision,
-                   reviewer=reviewer, comment=comment)
+                   reviewer=reviewer, comment=comment, artwork_version=artwork_version)
     return bridge("deliveries/master-review/followup", project, payload, method="POST", timeout=120)["event"]
 
 

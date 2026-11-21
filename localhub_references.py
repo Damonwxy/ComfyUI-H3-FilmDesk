@@ -1,5 +1,6 @@
 """Keep immutable, project-scoped reference-image versions."""
 
+import base64
 import hashlib
 from pathlib import Path
 
@@ -88,5 +89,18 @@ def resolve_reference(jobs, root, project, choice):
         """, (project, asset_id, revision)).fetchone()
     if row is None:
         raise ValueError(f"项目中找不到参考图 · {asset_id} v{revision}")
+    if "sha256" in choice and choice["sha256"] != row["sha256"]:
+        raise ValueError("参考图与指定的字稿摘要不符")
     path = _snapshot(root, row["input_name"], row["sha256"])
     return str(path), dict(row)
+
+
+def read_reference_image(jobs, root, project, choice):
+    if not isinstance(choice, dict):
+        raise ValueError("请选择项目中的参考图和版本")
+    path, row = resolve_reference(jobs, root, project, choice)
+    data = Path(path).read_bytes()
+    if hashlib.sha256(data).hexdigest() != row["sha256"]:
+        raise ValueError("参考图与指定的字稿摘要不符")
+    return {"reference": row, "mime_type": "image/" + _FORMATS[Path(path).suffix].lower(),
+            "data": base64.b64encode(data).decode("ascii")}

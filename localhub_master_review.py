@@ -8,6 +8,7 @@ from localhub_delivery import verify_master
 from localhub_media import crop_frame_png, file_stamp, media_sha256, normalized_region, video_frame_png
 from localhub_storage import RequestConflict
 from localhub_timeline import list_deliveries, require_delivery
+from localhub_references import resolve_reference
 
 
 def _followups(db, project, binding=None):
@@ -20,6 +21,19 @@ def _followups(db, project, binding=None):
         args.append(binding)
     return [{"source_binding": r["source"], "annotation": json.loads(r["note"]),
              "version": r["version"], "recorded_at": r["recorded_at"], **json.loads(r["event"])}
+            for r in db.execute(sql + " ORDER BY source,note,version", args)]
+
+
+def _artwork_history(db, project, binding=None):
+    if not db.execute("SELECT 1 FROM sqlite_master WHERE name='master_note_artwork' AND type='table'").fetchone():
+        return []
+    sql = "SELECT source,note,version,artwork,recorded_at FROM master_note_artwork WHERE project=?"
+    args = [project]
+    if binding is not None:
+        sql += " AND source=?"
+        args.append(binding)
+    return [{"source_binding": r["source"], "annotation": json.loads(r["note"]), "version": r["version"],
+             "recorded_at": r["recorded_at"], **json.loads(r["artwork"])}
             for r in db.execute(sql + " ORDER BY source,note,version", args)]
 
 
@@ -46,6 +60,8 @@ def list_master_reviews(jobs, project):
                 scopes[binding]["notes"].append(item)
         for event in _followups(db, project):
             scopes[event["source_binding"]].setdefault("followups", []).append(event)
+        for record in _artwork_history(db, project):
+            scopes[record["source_binding"]].setdefault("artwork_history", []).append(record)
     reviews = sorted(scopes.values(), key=lambda r: (-r["delivery"]["revision"], r["binding"]))
     for review in reviews:
         review["notes"].sort(key=lambda n: n["frame"])
@@ -91,7 +107,9 @@ def master_review(jobs, project, spec, action):
             new = {**note, "stamp": binding}
         result["notes"] = jobs.frame_notes(master["job_id"], master["file_index"], binding, info["frames"], new)
         with jobs.db() as db:
+            db.execute("BEGIN")
             result["followups"] = _followups(db, project, binding)
+            result["artwork_history"] = _artwork_history(db, project, binding)
     return result
 
 
@@ -103,6 +121,54 @@ def _scope(binding, project):
             or not isinstance(value.get("master"), dict) or not isinstance(value.get("delivery"), dict)):
         raise ValueError("请选择当前项目的母版回执")
     return value
+
+
+def _note_key(jobs, project, source, annotation):
+    original = _scope(source, project)
+    master = original["master"]
+    job_id, index = master.get("job_id"), master.get("file_index")
+    if not isinstance(job_id, str) or type(index) is not int or index < 0:
+        raise ValueError("原意见的母版回执无效")
+    row = jobs.find(job_id)
+    if row is None or row["project"] != project:
+        raise LookupError("找不到原意见所在的母版")
+    notes = jobs.frame_notes(job_id, index, source, None)
+    note = next((n for n in notes if n == annotation), None)
+    if note is None:
+        raise LookupError("找不到该帧和选区的原始意见")
+    return project, source, json.dumps(note, sort_keys=True, ensure_ascii=False)
+
+
+def link_artwork(jobs, root, project, payload):
+    if not isinstance(payload, dict) or not isinstance(payload.get("reference"), dict):
+        raise ValueError("请选择已登记的字稿版本")
+    key = _note_key(jobs, project, payload.get("source_binding"), payload.get("annotation"))
+    expected = payload.get("expected_version")
+    if type(expected) is not int or not 0 <= expected < 2**63-1:
+        raise ValueError("请提供原意见当前的字稿关联版本")
+    _, ref = resolve_reference(jobs, root, project, payload["reference"])
+    artwork = {"reference": {k: ref[k] for k in ("asset_id", "revision", "sha256", "source")}}
+    for field, label, limit in (("approved_by", "核准人", 120), ("approval_record", "核准依据", 1000)):
+        value = payload.get(field)
+        if not isinstance(value, str) or not 1 <= len(value.strip()) <= limit:
+            raise ValueError(f"请填写{label}，最多 {limit} 字")
+        artwork[field] = value.strip()
+    with jobs.db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        db.execute("""CREATE TABLE IF NOT EXISTS master_note_artwork (
+            project TEXT NOT NULL, source TEXT NOT NULL, note TEXT NOT NULL, version INTEGER NOT NULL,
+            artwork TEXT NOT NULL, recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY(project,source,note,version))""")
+        last = db.execute("""SELECT version,artwork FROM master_note_artwork WHERE project=? AND source=? AND note=?
+                             ORDER BY version DESC LIMIT 1""", key).fetchone()
+        version = last["version"] if last else 0
+        if last and expected in (version - 1, version) and json.loads(last["artwork"]) == artwork:
+            return {"version": version, **artwork}
+        if expected != version:
+            raise RequestConflict("该意见的字稿依据已更新，请重读后再关联")
+        db.execute("INSERT INTO master_note_artwork(project,source,note,version,artwork) VALUES (?,?,?,?,?)",
+                   (*key, version + 1, json.dumps(artwork, ensure_ascii=False)))
+    return {"version": version + 1, **artwork}
 
 
 def record_followup(jobs, project, payload):
@@ -120,16 +186,7 @@ def record_followup(jobs, project, payload):
     if (original.get("delivery", {}).get("revision") == revised.get("delivery", {}).get("revision")
             and source_master.get("sha256") == revised["master"].get("sha256")):
         raise ValueError("请选择修订后的母版或剪版")
-    job_id, index = source_master.get("job_id"), source_master.get("file_index")
-    if not isinstance(job_id, str) or type(index) is not int or index < 0:
-        raise ValueError("原意见的母版回执无效")
-    row = jobs.find(job_id)
-    if row is None or row["project"] != project:
-        raise LookupError("找不到原意见所在的母版")
-    notes = jobs.frame_notes(job_id, index, source, None)
-    note = next((n for n in notes if n == payload.get("annotation")), None)
-    if note is None:
-        raise LookupError("找不到该帧和选区的原始意见")
+    key = _note_key(jobs, project, source, payload.get("annotation"))
     review = master_review(jobs, project, revised, "read")
     if review["binding"] != target:
         raise RequestConflict("修订母版已变，请重新看过对应帧后再记录")
@@ -144,9 +201,13 @@ def record_followup(jobs, project, payload):
         if not isinstance(reviewer, str) or not 1 <= len(reviewer.strip()) <= 120:
             raise ValueError("请填写实际复看者的称呼")
         event["reviewer"] = reviewer.strip()
-    key = (project, source, json.dumps(note, sort_keys=True, ensure_ascii=False))
     with jobs.db() as db:
         db.execute("BEGIN IMMEDIATE")
+        basis = payload.get("artwork_version")
+        if basis is not None:
+            if type(basis) is not int or not 1 <= basis < 2**63:
+                raise ValueError("字稿关联版号须为正整数")
+            event["artwork_version"] = basis
         db.execute("""CREATE TABLE IF NOT EXISTS master_note_events (
             project TEXT NOT NULL, source TEXT NOT NULL, note TEXT NOT NULL, version INTEGER NOT NULL,
             event TEXT NOT NULL, recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -158,6 +219,14 @@ def record_followup(jobs, project, payload):
             return {"version": version, **event}
         if version != expected:
             raise RequestConflict("该意见已有新的处理记录，请重读后再提交")
+        current = None
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='master_note_artwork'").fetchone():
+            current = db.execute("SELECT MAX(version) FROM master_note_artwork WHERE project=? AND source=? AND note=?",
+                                 key).fetchone()[0]
+        if basis != current:
+            raise RequestConflict("请查看该意见当前的字稿依据，并带回对应关联版号")
+        if state != "submitted" and previous.get("artwork_version") != basis:
+            raise RequestConflict("字稿依据已经更换，请按新依据重新提交修订再复看")
         if state != "submitted" and (previous.get("state") != "submitted" or previous["target_binding"] != target
                                      or previous["target_frame"] != frame):
             raise RequestConflict("请先找到对应修订母版和帧的待复看记录")
