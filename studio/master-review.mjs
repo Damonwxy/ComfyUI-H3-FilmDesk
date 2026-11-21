@@ -1,3 +1,8 @@
+function decodeFrame(png) {
+  const bytes = Uint8Array.from(atob(png), c => c.charCodeAt(0));
+  return createImageBitmap(new Blob([bytes], {type: "image/png"}));
+}
+
 export function initMasterReview({ el, node, send }) {
   const panel = el("master-review"), canvas = el("mr-picture"), pen = canvas.getContext("2d");
   const position = el("mr-frame"), placement = el("mr-placement"), note = el("mr-note");
@@ -41,13 +46,55 @@ export function initMasterReview({ el, node, send }) {
     if (seq !== generation) throw new Error("审片对象已切换");
     return {...review, displayed: picture && panel.open && binding === review.binding ? {frame:selected, region} : null};
   }
-  function history(notes) {
+  function revisionLink(event) {
+    const target = JSON.parse(event.target_binding);
+    const states = {submitted:"待复看", accepted:"已接受", changes_requested:"需再修改"};
+    const label = target.delivery.name + " v" + target.delivery.revision + " · 第 " + event.target_frame + " 帧";
+    const details = node("details");
+    details.append(node("summary", states[event.state] + " · " + label));
+    details.append(node("p", (event.reviewer ? event.reviewer + " · " : "") + event.comment));
+    const message = node("p");
+    message.setAttribute("role", "status");
+    details.append(message);
+    let loading = false;
+    details.ontoggle = async () => {
+      if (!details.open || loading || details.querySelector("canvas")) return;
+      loading = true;
+      message.textContent = "正在读取修订帧…";
+      try {
+        const still = await call("frame", {...target, binding:event.target_binding, frame:event.target_frame});
+        if (!details.isConnected) return;
+        const bitmap = await decodeFrame(still.png);
+        try {
+          if (!details.isConnected) return;
+          const preview = node("canvas");
+          preview.width = bitmap.width;
+          preview.height = bitmap.height;
+          preview.setAttribute("role", "img");
+          preview.setAttribute("aria-label", label);
+          preview.getContext("2d").drawImage(bitmap, 0, 0);
+          details.append(preview);
+        } finally {
+          bitmap.close();
+        }
+        message.textContent = "";
+      } catch (error) { message.textContent = error.message; }
+      finally { loading = false; }
+    };
+    return details;
+  }
+  function history(notes, followups = []) {
     const list = el("mr-history"); list.replaceChildren();
     if (!notes.length) list.textContent = "这份母版在当前版式下暂无意见。";
     for (const item of notes) {
       const button = node("button", "第 " + item.frame + " 帧 · " + item.note);
       button.type = "button"; button.onclick = () => { position.value = item.frame; locate(item); };
       list.append(button);
+      for (const event of followups) {
+        const source = event.annotation;
+        if (item.frame === source.frame && item.note === source.note &&
+            JSON.stringify(item.region) === JSON.stringify(source.region)) list.append(revisionLink(event));
+      }
     }
   }
   function box(coords, color, dash = []) {
@@ -76,11 +123,10 @@ export function initMasterReview({ el, node, send }) {
     try {
       const review = await call("read");
       if (seq !== generation) return;
-      binding = review.binding; history(review.notes); position.max = review.frames-1;
+      binding = review.binding; history(review.notes, review.followups); position.max = review.frames-1;
       const still = await call("frame", {frame});
       if (seq !== generation) return;
-      const bytes = Uint8Array.from(atob(still.png), c => c.charCodeAt(0));
-      const bitmap = await createImageBitmap(new Blob([bytes], {type:"image/png"}));
+      const bitmap = await decodeFrame(still.png);
       if (seq !== generation) { bitmap.close(); return; }
       selected = frame; picture = bitmap;
       const draft = drafts.get(draftKey());
@@ -128,7 +174,7 @@ export function initMasterReview({ el, node, send }) {
     try {
       const result = await call("save",{annotation});
       if (seq !== generation) return;
-      history(result.notes); status("第 " + selected + " 帧的意见已保存到项目。");
+      history(result.notes, result.followups); status("第 " + selected + " 帧的意见已保存到项目。");
     } catch (error) { if (seq === generation) status(error.message); }
     finally { if (seq === generation) { busy = false; controls(); } }
   };

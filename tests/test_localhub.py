@@ -22,7 +22,7 @@ from localhub_audio_qc import inspect_audio, inspect_cut_audio
 from localhub_compare import compare_takes
 from localhub_copy import list_copy, update_copy
 from localhub_jobs import Jobs, RequestConflict
-from localhub_master_review import list_master_reviews, master_review
+from localhub_master_review import list_master_reviews, master_review, record_followup
 from localhub_media import file_stamp, probe_media
 from localhub_project_plan import bind_h3_shot, plan_cut, read_project_plan, save_project_plan
 from localhub_references import list_references, register_reference, resolve_reference
@@ -370,6 +370,61 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         history = list_master_reviews(reopened, "fixture")["reviews"]
         self.assertEqual([(r["binding"], r["notes"]) for r in history], [(binding, [annotation])])
         self.assertEqual(list_master_reviews(reopened, "other")["reviews"], [])
+
+    def test_followup_keeps_exact_note_target_and_verdict_history(self):
+        project = "review"
+        def make_master(name):
+            path = self.root / name
+            path.write_bytes(name.encode())
+            job = self.store.register_media(project, name, str(path), "video", {"frames": 12})[0]
+            return {"job_id": job["id"], "file_index": 0}
+        original, revised = make_master("a.mp4"), make_master("b.mp4")
+        info = dict(width=320, height=180, frames=12, fps=24, has_audio=False)
+        delivery = dict(name="Preview", aspect="16:9", market="Demo", language="en")
+        specs = []
+        for revision, master in enumerate([original, revised], 1):
+            clip = dict(master, duration_frames=12, start_frame=0)
+            save_edit(self.store, project, revision-1, dict(rate="24", tracks=[dict(kind="Video", clips=[clip])]))
+            spec = register_delivery(self.store, project, dict(delivery, revision=revision))
+            specs.append(dict(delivery=spec, master=master))
+        save = lambda payload: record_followup(self.store, project, payload)
+        with patch("localhub_delivery.inspect_media", return_value=("file", "video", info)):
+            a, b = [master_review(self.store, project, spec, "read")["binding"] for spec in specs]
+            note = dict(frame=6, note="Review detail", region=[0.1, 0.1, 0.5, 0.5])
+            master_review(self.store, project, dict(specs[0], binding=a, annotation=note), "save")
+            submit = dict(source_binding=a, annotation=note, target_binding=b, target_frame=7,
+                          expected_version=0, comment="Adjusted contrast", state="submitted")
+            verdict = dict(submit, state="changes_requested", reviewer="Test reviewer", comment="Still too dark")
+            with self.assertRaises(RequestConflict):
+                save(verdict)
+            with self.assertRaises(LookupError):
+                save(dict(submit, annotation=dict(note, region=[0,0,1,1])))
+            with self.assertRaises(ValueError):
+                record_followup(self.store, "another project", submit)
+            renamed = register_delivery(self.store, project, dict(delivery, revision=1, name="Alternate label"))
+            alias = master_review(self.store, project, dict(delivery=renamed, master=original), "read")
+            with self.assertRaisesRegex(ValueError, "修订后的母版"):
+                save(dict(submit, target_binding=alias["binding"]))
+            with self.assertRaises(ValueError):
+                save(dict(submit, target_frame=12))
+            self.assertEqual(save(submit), save(submit))
+            with self.assertRaises(RequestConflict):
+                save(dict(verdict, expected_version=1, target_frame=8))
+            self.assertEqual(save(dict(verdict, expected_version=1))["version"], 2)
+            with self.assertRaises(RequestConflict):
+                save(dict(verdict, state="accepted", expected_version=1))
+            self.assertEqual(save(dict(submit, expected_version=2, target_frame=8))["version"], 3)
+            accept = dict(verdict, expected_version=3, state="accepted", target_frame=8, comment="Detail visible")
+            self.assertEqual(save(accept), save(accept))
+            (self.root / "b.mp4").write_bytes(b"another render")
+            with self.assertRaises(RequestConflict):
+                save(dict(submit, expected_version=4))
+        (self.root / "a.mp4").unlink()
+        reviews = list_master_reviews(ProjectDatabase(self.store.path), project)["reviews"]
+        self.assertEqual(reviews[0]["notes"], [note])
+        self.assertEqual([e["state"] for e in reviews[0]["followups"]],
+                         ["submitted","changes_requested","submitted","accepted"])
+        self.assertEqual(reviews[0]["followups"][-1]["target_binding"], b)
 
     async def test_relocate_delivery_and_detect_changed_media(self):
         row = await self.accept()
