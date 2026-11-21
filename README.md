@@ -67,6 +67,8 @@ node --test tests/compare_cut.test.mjs
 
 ## 验证
 
+提交修改和复现 CI 的步骤见[贡献指南](CONTRIBUTING.md)。
+
 ```powershell
 .\.venv\Scripts\python -m unittest discover -s tests -p "test_*.py"
 node --test tests/compare_cut.test.mjs tests/site_tools.test.mjs

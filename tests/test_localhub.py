@@ -104,7 +104,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.scratch = TemporaryDirectory(dir=os.environ.get("LOCALHUB_TEST_ROOT"))
         self.addCleanup(self.scratch.cleanup)
-        self.root = Path(self.scratch.name)
+        self.root = Path(self.scratch.name).resolve()
         self.file = self.root / "候选 media.mp4"
         self.file.write_bytes(b"fixture")
         self.native = Native(self.file)
