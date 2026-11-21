@@ -293,6 +293,11 @@
           <label>参考视频本机路径<textarea name="ref_videos" rows="2" placeholder="每行一段"></textarea></label>
           <label>参考音频本机路径<textarea name="ref_audios" rows="2" placeholder="每行一段"></textarea></label>
         </fieldset>
+        <details>
+          <summary>用深度片或轮廓片控制运动</summary>
+          <label>控制视频本机路径<input name="control_video" type="text" placeholder="例如 Blender 导出的深度片"></label>
+          <label>控制强度<input name="control_strength" type="number" min="0" max="10" step="any" value="1"></label>
+        </details>
         <div class="input-row">
           <label>取用起帧（可选）<input name="take_start" type="number" min="0" step="1" placeholder="0"></label>
           <label>取用出帧（不含，可选）<input name="take_end" type="number" min="1" step="1" placeholder="留空用到末帧"></label>

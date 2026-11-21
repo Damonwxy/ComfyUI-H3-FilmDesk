@@ -262,11 +262,15 @@ async def v_preflight(request):
             raise ValueError("ComfyUI 工作流预检失败 · " + " · ".join(failures[:3] or [error["message"]]))
         previews = []
         if p.get("preview_reference_ends") is True:
-            inputs = {ref["tag"]: ref["input"] for ref in info["references"] if ref["role"] == "video"}
-            for span in info["preflight"].get("video_ranges", []):
-                path = Path(folder_paths.get_input_directory()) / inputs[span["tag"]]
+            inputs = {ref["tag"]: ref for ref in info["references"]}
+            spans = list(info["preflight"].get("video_ranges", []))
+            if "control_range" in info["preflight"]:
+                spans.append(info["preflight"]["control_range"])
+            for span in spans:
+                ref = inputs[span["tag"]]
+                path = Path(folder_paths.get_input_directory()) / ref["input"]
                 png = await asyncio.to_thread(video_frame_png, path, span["last_frame"],
-                                              ffmpeg_tools.locate_ffmpeg(), thumbnail=True)
+                                              ffmpeg_tools.locate_ffmpeg(), thumbnail=True, control=ref["role"] == "control")
                 previews.append({**span, "png": base64.b64encode(png).decode("ascii")})
     except (ValueError, TypeError, LookupError, OSError, RuntimeError, OverflowError) as exc:
         return _err(400, str(exc))
