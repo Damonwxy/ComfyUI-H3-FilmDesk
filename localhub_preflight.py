@@ -5,12 +5,36 @@ import json
 import math
 import os
 import re
+import subprocess
+from pathlib import Path
 
+from ffmpeg_tools import locate_ffmpeg
 from h3_graph import build_h3_graph
 from localhub_jobs import RequestConflict
 
 
 _TAG = re.compile(r"<\s*(?:Picture|Video|Audio)\b[^<>]*>", re.IGNORECASE)
+
+
+def _video_range(ref, limit):
+    # The bridge produces a constant-rate MP4 with one H.264 packet per picture.
+    # Count the prepared video stream, independently of any longer soundtrack.
+    import folder_paths
+
+    path = Path(folder_paths.get_input_directory()) / ref["input"]
+    try:
+        result = subprocess.run([locate_ffmpeg(), "-nostdin", "-v", "error", "-i", str(path),
+                                 "-map", "0:v:0", "-c:v", "copy", "-f", "framecrc", "pipe:1"],
+                                capture_output=True, check=True, timeout=30)
+        prepared = sum(line.startswith(b"0,") for line in result.stdout.splitlines())
+    except (subprocess.SubprocessError, OSError) as exc:
+        raise ValueError(f"{ref['tag']} 无法读取已转换参考视频的帧数") from exc
+    available = min(prepared, limit)
+    if available < 5:
+        raise ValueError(f"{ref['tag']} 转为 24 fps 后仅有 {available} 帧，H3 视频参考至少需要 5 帧")
+    retained = available - (available - 5) % 17
+    return {"tag": ref["tag"], "fps": 24, "prepared_frames": prepared,
+            "start_frame": 0, "end_frame": retained, "last_frame": retained - 1}
 
 
 def _resolve_images(params, resolve):
@@ -95,6 +119,13 @@ def compile_plan(project, shot, params, take, resolve_reference=None, *, binding
     finally:
         output["filename_prefix"] = prefix
     info["preflight"] = {"plan_sha256": digest, "take": take, "warnings": warnings}
+    ranges = [_video_range(ref, frames) for ref in refs if ref["role"] == "video"]
+    if ranges:
+        info["preflight"]["video_ranges"] = ranges
+        for span in ranges:
+            if span["end_frame"] < span["prepared_frames"]:
+                warnings.append(f"{span['tag']} 的末段动作可能丢失。如需保留，可将 24 fps 参考的最后一帧"
+                                f"延长 {span['end_frame'] + 17 - span['prepared_frames']} 帧，再预检。")
     if binding:
         info["planned_shot"] = binding
     return graph, info

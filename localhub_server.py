@@ -5,6 +5,7 @@
 # 与手动点 Queue 走完全相同的执行链(含 DynamicVRAM / 显存优化节点集无关, 这里用核心节点图)。
 
 import os
+import base64
 import asyncio
 from functools import lru_cache, partial
 from pathlib import Path
@@ -20,6 +21,7 @@ import canvas_store
 import ffmpeg_tools
 from localhub_jobs import FINAL, Jobs, RequestConflict, observe_native
 from localhub_preflight import compile_plan, confirm_plan
+from localhub_media import video_frame_png
 from localhub_project_http import _body, _err, _label, _ok, register_project_routes
 from localhub_project_plan import bind_h3_shot
 from localhub_references import resolve_reference
@@ -258,9 +260,19 @@ async def v_preflight(request):
             failures = [issue["details"] or issue["message"]
                         for node in node_errors.values() for issue in node["errors"]]
             raise ValueError("ComfyUI 工作流预检失败 · " + " · ".join(failures[:3] or [error["message"]]))
+        previews = []
+        if p.get("preview_reference_ends") is True:
+            inputs = {ref["tag"]: ref["input"] for ref in info["references"] if ref["role"] == "video"}
+            for span in info["preflight"].get("video_ranges", []):
+                path = Path(folder_paths.get_input_directory()) / inputs[span["tag"]]
+                png = await asyncio.to_thread(video_frame_png, path, span["last_frame"],
+                                              ffmpeg_tools.locate_ffmpeg(), thumbnail=True)
+                previews.append({**span, "png": base64.b64encode(png).decode("ascii")})
     except (ValueError, TypeError, LookupError, OSError, RuntimeError, OverflowError) as exc:
         return _err(400, str(exc))
     result = {"project": project, "shot": shot, "info": info}
+    if previews:
+        result["reference_previews"] = previews
     if binding:
         result["submission"] = {
             "key": str(uuid4()),

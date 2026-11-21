@@ -1417,7 +1417,25 @@ function resetPreflight() {
   el("confirm-generate").disabled = true;
 }
 
-function renderPlan(info) {
+async function displayReferenceEnd(figure, png) {
+  try {
+    const bytes = Uint8Array.from(atob(png), char => char.charCodeAt(0));
+    const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+    try {
+      const canvas = node("canvas");
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      canvas.setAttribute("role", "img");
+      canvas.setAttribute("aria-label", figure.querySelector("figcaption").textContent);
+      canvas.getContext("2d").drawImage(bitmap, 0, 0);
+      figure.prepend(canvas);
+    } finally { bitmap.close(); }
+  } catch {
+    figure.append(node("p", "末帧预览解码失败。"));
+  }
+}
+
+function renderPlan(info, previews = []) {
   const { take, warnings } = info.preflight;
   const panel = el("preflight-result");
   panel.replaceChildren(node("p",
@@ -1434,6 +1452,16 @@ function renderPlan(info) {
     panel.append(refs);
   }
   for (const warning of warnings) panel.append(node("p", warning));
+  for (const span of info.preflight.video_ranges || []) {
+    const figure = node("figure");
+    const dropped = span.prepared_frames - span.end_frame;
+    const summary = span.tag + " · 转为 24 fps 并限长后共 " + span.prepared_frames + " 帧，画面采用第 0–"
+      + span.last_frame + " 帧" + (dropped ? "，末尾 " + dropped + " 帧未采用。" : "。");
+    figure.append(node("figcaption", summary));
+    panel.append(figure);
+    const preview = previews.find(item => item.tag === span.tag);
+    if (preview) displayReferenceEnd(figure, preview.png);
+  }
 }
 
 el("generate").addEventListener("input", (event) => {
@@ -1452,13 +1480,14 @@ el("generate").addEventListener("submit", async (event) => {
   preview.disabled = true;
   el("preflight-result").textContent = "正在检查镜头和参考素材…";
   try {
-    const { info } = await send(api + "/video/preflight", "POST", body);
+    const { info, reference_previews } = await send(api + "/video/preflight", "POST",
+      { ...body, preview_reference_ends: true });
     if (draft !== JSON.stringify(generationDraft(form))) return;
     body.params.seed = info.seed;
     body.take = info.preflight.take;
     body.plan_sha256 = info.preflight.plan_sha256;
     approvedDraft = { body, draft };
-    renderPlan(info);
+    renderPlan(info, reference_previews);
     el("confirm-generate").disabled = false;
   } catch (error) {
     if (draft === JSON.stringify(generationDraft(form))) el("preflight-result").textContent = error.message;
