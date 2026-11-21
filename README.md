@@ -6,17 +6,20 @@ ComfyUI H3 FilmDesk 面向使用 ComfyUI 和 MiniMax H3 的本地视频创作者
 
 ## 从两条本地素材做一条广告
 
-准备两个本地视频，第一条展示商品全貌，第二条展示细节。安装 Python 3.12 和含 libx264 的 FFmpeg，将 `ffmpeg`、`ffprobe` 加入 PATH。在 PowerShell 中运行：
+准备两个本地视频，第一条展示商品全貌，第二条展示细节。Windows 验证环境使用独立 CPython 3.12.14 和含 libx264 的 FFmpeg。将 `ffmpeg`、`ffprobe` 加入 PATH，并确认 `py -3.12` 指向准备使用的解释器；也可以在创建 venv 时直接使用解释器的完整路径。在 PowerShell 中运行：
 
 ```powershell
 git clone https://github.com/Damonwxy/ComfyUI-H3-FilmDesk.git
 cd ComfyUI-H3-FilmDesk
 py -3.12 -m venv .venv
 .\.venv\Scripts\python -m pip install -r requirements-studio.txt -r requirements-timeline.txt
+.\.venv\Scripts\python -c "import opentimelineio as otio; print(otio.__version__)"
 .\.venv\Scripts\python two_shot_demo.py reveal.mp4 detail.mp4 demo-project
 ```
 
 将命令中的输入文件名换为自己的素材路径，输出目录取一个新名字。示例启动临时本机制作台，登记两条素材，保存分镜与剪版，按保存的源帧范围渲染，每镜最多 3 秒。成片是 960×540、24 fps 的无声横版预览。可在 `demo-project/input/localhub_media/master.mp4` 播放，在 `receipt.json` 查看交付规格和实测结果。`edit.otio` 供剪辑软件导入，项目目录内保留了它引用的文件。
+
+若 Windows 在 `import opentimelineio` 时直接退出，使用独立 CPython 新建 venv 再安装。本次在 Anaconda 3.12.4 环境中复现了原生模块导入崩溃；相同 OTIO 版本在独立 CPython 3.12.14 中通过导入及序列化检查。
 
 要继续编辑，用同一环境运行：
 
