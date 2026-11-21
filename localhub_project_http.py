@@ -15,6 +15,7 @@ from legacy_canvas import read_archives
 from localhub_audio_qc import REPORT_VERSION, inspect_audio
 from localhub_copy import list_copy, update_copy
 from localhub_delivery import describe_video_sources, verify_master
+from localhub_master_review import list_master_reviews, master_review
 from localhub_jobs import Jobs
 from localhub_media import file_stamp, inspect_media, probe_media
 from localhub_project_plan import plan_cut, read_project_plan, save_project_plan
@@ -357,6 +358,24 @@ async def e_master_check(request):
         return _err(400, str(exc))
 
 
+async def e_master_review(request):
+    try:
+        project = _label(request.query.get("project"), "project")
+        if request.method == "GET":
+            return _ok(list_master_reviews(_context(request).jobs(), project))
+        result = await asyncio.to_thread(master_review, _context(request).jobs(), project,
+                                         await _body(request), request.match_info["action"])
+        return _ok({"review": result})
+    except RequestConflict as exc:
+        return _err(409, str(exc))
+    except LookupError as exc:
+        return _err(404, str(exc))
+    except NotImplementedError as exc:
+        return _err(501, str(exc))
+    except (OSError, ValueError) as exc:
+        return _err(400, str(exc))
+
+
 async def e_export(request):
     try:
         project = _label(request.query.get("project"), "project", "本地项目")
@@ -413,7 +432,7 @@ async def e_import(request):
 async def studio(request):
     name = request.match_info.get("name", "index.html")
     if name not in {"index.html", "studio.css", "studio.js", "site-tools.mjs", "copy-review.mjs", "delivery-review.mjs",
-                    "project-plan.mjs", "frame-region.mjs", "compare-cut.mjs"}:
+                    "project-plan.mjs", "frame-region.mjs", "compare-cut.mjs", "master-review.mjs"}:
         return _err(404, "页面不存在")
     headers = {
         "Content-Security-Policy": "default-src 'self'; object-src 'none'; base-uri 'none'; media-src 'self' blob:",
@@ -461,6 +480,8 @@ def register_project_routes(app, table, *, jobs, input_directory, generation_ena
     table.put("/localhub/v2/deliveries/subtitles")(e_subtitles)
     table.get("/localhub/v2/deliveries/subtitles.srt")(e_subtitles)
     table.post("/localhub/v2/deliveries/master-check")(e_master_check)
+    table.get("/localhub/v2/deliveries/master-review")(e_master_review)
+    table.post("/localhub/v2/deliveries/master-review/{action:read|frame|save}")(e_master_review)
     table.get("/localhub/v2/ad-copy")(e_copy)
     table.post("/localhub/v2/ad-copy")(e_copy)
     table.put("/localhub/v2/ad-copy")(e_copy)

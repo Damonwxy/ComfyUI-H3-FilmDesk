@@ -35,6 +35,12 @@ py -3.12 -m venv .venv
 
 可选的 Codex 接入使用 `requirements-mcp.txt` 和 `studio_mcp.py`。将 MCP 客户端的启动命令设为安装依赖的 Python，并用脚本绝对路径作参数。`LOCALHUB_URL` 指向本机实例，`LOCALHUB_DATABASE` 指向同一实例的项目数据库。浏览器、命令行和 MCP 共用项目版本。
 
+## 在交付母版上审片
+
+在制作台为已有剪版登记交付，选择对应的母版文件并核对规格。展开「在母版画面上审片」，输入从 0 起算的成片帧号，点「查看此帧」，可选中两个对角点再保存意见。意见随项目记录交付规格、剪版、母版文件摘要和审片版式。
+
+换到新的 Codex 会话后，可用 `localhub_list_master_reviews` 找回意见。有多个交付或母版符合描述时，先请创作者选择。用 `localhub_read_master_review` 取得所选母版的回执，`localhub_read_master_frame` 可把指定帧以 PNG 图像带进对话，`localhub_save_master_note` 保存整帧或选区意见。读取历史意见可直连本机项目库，取图和新增意见需要本机制作台或桥接服务在线。
+
 ## 在两个候选间保留切点
 
 原片为 24 fps，从第 12 帧开始取 48 帧。要换成同一动作的 48 fps 素材，相同的两秒应从第 24 帧开始，持续 96 帧。以下示例可在仓库根目录以 Node.js 运行。

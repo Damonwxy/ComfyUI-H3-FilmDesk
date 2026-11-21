@@ -1,4 +1,7 @@
+import { initMasterReview } from "./master-review.mjs";
+
 export function initDeliveryReview({ el, node, request, send, jobs }) {
+  const review = initMasterReview({ el, node, send });
   const panel = el("delivery-review");
   const subtitles = el("delivery-subtitles");
   const cues = el("subtitle-cues");
@@ -151,6 +154,7 @@ export function initDeliveryReview({ el, node, request, send, jobs }) {
   }
 
   function invalidateMaster() {
+    review.reset();
     checked = null;
     checkId++;
     options.hidden = true;
@@ -194,6 +198,7 @@ export function initDeliveryReview({ el, node, request, send, jobs }) {
   }
 
   function reset() {
+    review.reset();
     const previous = active?.trigger;
     previous?.setAttribute("aria-expanded", "false");
     active = sheet = undefined;
@@ -284,6 +289,7 @@ export function initDeliveryReview({ el, node, request, send, jobs }) {
       const { master, video_sources } = await send(api + "master-check?" + new URLSearchParams({ project: context.project }), "POST", spec);
       if (active !== context || id !== checkId) return;
       checked = spec;
+      review.attach(spec, form.master.selectedOptions[0].textContent);
       status("master-status", `规格吻合 · ${master.width} × ${master.height} · ${master.fps} fps · ${master.frames} 帧`);
       displaySources(video_sources || []);
       options.hidden = false;
@@ -309,5 +315,5 @@ export function initDeliveryReview({ el, node, request, send, jobs }) {
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
-  return { open, reset, unsaved, syncMasters, associate };
+  return { open, reset, unsaved, syncMasters, associate, readMasterReview: review.read };
 }

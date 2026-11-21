@@ -200,6 +200,22 @@
           </div>
         </form>
       </section>
+      <details id="master-review" class="generate" hidden>
+        <summary>在母版画面上审片</summary>
+        <h3 id="mr-title"></h3>
+        <div class="inline wrap">
+          <label>审片版式<select id="mr-placement"><option value="original">原始画面</option>
+            <option value="youtube-vertical-2026-11-20">YouTube 竖屏广告参考区</option></select></label>
+          <label>成片帧号<input id="mr-frame" type="number" min="0" step="1" value="0"></label>
+          <button type="button" id="mr-locate">查看此帧</button>
+        </div>
+        <div class="region-editor"><canvas id="mr-picture" tabindex="0" aria-label="母版选区，点两个对角或用方向键移动并按回车定点" hidden></canvas></div>
+        <p id="mr-status" role="status"></p>
+        <label>这帧要调整哪里？<textarea id="mr-note" maxlength="1000" rows="2"></textarea></label>
+        <div class="inline wrap"><button id="mr-save" type="button" disabled>保存本版意见</button>
+          <button id="mr-clear" type="button" hidden>取消选区</button></div>
+        <h4>这份母版的意见</h4><div id="mr-history"></div>
+      </details>
       <details id="new-delivery" class="generate">
         <summary>登记交付规格</summary>
         <form id="register-delivery">

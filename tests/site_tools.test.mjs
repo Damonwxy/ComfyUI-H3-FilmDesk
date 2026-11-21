@@ -98,3 +98,18 @@ test("offline review keeps job lookup available while generation tools are absen
   assert.ok(!tools.has("localhub_preflight_shot"));
   assert.ok(!tools.has("localhub_submit_shot"));
 });
+
+test("the browser can discover all tools and read the displayed master frame", async () => {
+  const tools = new Map();
+  const context = { registerTool(tool) {
+    assert.equal(typeof tool.annotations?.readOnlyHint === "boolean" || tool.annotations?.consequentialHint === true, true, tool.name);
+    tools.set(tool.name, tool);
+  } };
+  const review = { displayed: {frame: 73, region: [0.5, 0.5, 0.55, 0.55]} };
+  const noop = () => {};
+  await registerSiteTools({ modelContext: context }, {}, { read: noop, save: noop, readPlan: noop, savePlan: noop,
+    preflightShot: noop, submitShot: noop, readJob: noop, readFrameNotes: noop, readMasterReview: () => review });
+  assert.deepEqual(await tools.get("localhub_read_master_review").execute({}), review);
+  assert.equal(tools.get("localhub_save_plan").annotations.readOnlyHint, false);
+  assert.equal(tools.get("localhub_save_cut").annotations.readOnlyHint, false);
+});

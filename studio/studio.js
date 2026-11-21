@@ -1588,7 +1588,7 @@ async function startStudio() {
   el("review-mode").hidden = generation;
   el("generation-panel").hidden = !generation;
   const callbacks = { read: readSiteProject, save: saveSiteCut, readPlan: readSitePlan, savePlan: saveSitePlan,
-    readJob: readSiteJob,
+    readJob: readSiteJob, readMasterReview: deliveryReview.readMasterReview,
     async readFrameNotes({ job_id, file_index }, signal) {
       const project = state.project;
       const result = await request(api + "/jobs/" + encodeURIComponent(job_id) + "/media/" +

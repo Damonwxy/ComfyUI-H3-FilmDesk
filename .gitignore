@@ -16,6 +16,7 @@
 !/localhub_copy.py
 !/localhub_delivery.py
 !/localhub_jobs.py
+!/localhub_master_review.py
 !/localhub_media.py
 !/localhub_nodes.py
 !/localhub_preflight.py
@@ -37,6 +38,7 @@
 !/studio/copy-review.mjs
 !/studio/delivery-review.mjs
 !/studio/frame-region.mjs
+!/studio/master-review.mjs
 !/studio/index.html
 !/studio/project-plan.mjs
 !/studio/site-tools.mjs

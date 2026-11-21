@@ -8,7 +8,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 from uuid import UUID
 
 from mcp.server.fastmcp import FastMCP
-from mcp.types import ToolAnnotations
+from mcp.types import ImageContent, ToolAnnotations
 from pydantic import BaseModel
 
 from localhub_project_plan import plan_cut, read_project_plan, save_project_plan
@@ -137,6 +137,55 @@ def localhub_submit_shot(project: str, submission: dict) -> dict:
     if not isinstance(body, dict) or body.get("project") != project or not body.get("plan_shot") or not isinstance(key, str):
         raise ValueError("请使用当前项目的镜头预检回执")
     return bridge("jobs", project, body, method="POST", headers={"Idempotency-Key": key}, timeout=60)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, untrustedContentHint=True))
+def localhub_list_master_reviews(project: str) -> dict:
+    """Find registered deliveries and saved master-frame notes for a project, including historical cuts."""
+    if database:
+        from localhub_master_review import list_master_reviews
+        return list_master_reviews(ProjectDatabase(database), project)
+    return bridge("deliveries/master-review", project)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, untrustedContentHint=True))
+def localhub_read_master_review(project: str, delivery: dict, master: dict, placement: str = "original") -> dict:
+    """Verify a specific master against a delivery and return its current binding, frame count and notes.
+
+    Select a delivery from localhub_list_master_reviews; master contains job_id and file_index.
+    """
+    return bridge("deliveries/master-review/read", project, {"delivery": delivery, "master": master,
+                  "placement": placement}, method="POST", timeout=120)["review"]
+
+
+def review_scope(project, binding):
+    scope = json.loads(binding)
+    if not isinstance(scope, dict) or scope.get("project") != project:
+        raise ValueError("请使用当前项目的母版审片回执")
+    return {**scope, "binding": binding}
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
+def localhub_read_master_frame(project: str, binding: str, frame: int) -> ImageContent:
+    """View the exact PNG frame of a checked master in chat. Frame numbers start at zero."""
+    spec = review_scope(project, binding)
+    review = bridge("deliveries/master-review/frame", project, {**spec, "frame": frame},
+                    method="POST", timeout=150)["review"]
+    return ImageContent(type="image", mimeType="image/png", data=review["png"])
+
+
+@mcp.tool(annotations=ToolAnnotations(destructiveHint=False, idempotentHint=True, untrustedContentHint=True))
+def localhub_save_master_note(project: str, binding: str, frame: int, note: str, region: list[float] | None = None) -> dict:
+    """Save an opinion at a zero-based frame using the exact binding from read_master_review.
+
+    Optional region is normalized left, top, right, bottom. A changed master must be reviewed again.
+    """
+    spec = review_scope(project, binding)
+    annotation = {"frame": frame, "note": note}
+    if region is not None:
+        annotation["region"] = region
+    return bridge("deliveries/master-review/save", project, {**spec,
+                  "annotation": annotation}, method="POST", timeout=120)["review"]
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, untrustedContentHint=True))

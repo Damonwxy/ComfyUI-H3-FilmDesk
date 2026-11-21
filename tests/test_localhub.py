@@ -21,6 +21,7 @@ from legacy_canvas import archive_canvas, read_archives
 from localhub_audio_qc import inspect_audio
 from localhub_copy import list_copy, update_copy
 from localhub_jobs import Jobs, RequestConflict
+from localhub_master_review import list_master_reviews, master_review
 from localhub_media import file_stamp, probe_media
 from localhub_project_plan import bind_h3_shot, plan_cut, read_project_plan, save_project_plan
 from localhub_references import list_references, register_reference, resolve_reference
@@ -295,6 +296,40 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(save_project_plan(offline, "fixture", 2, dict(plan, brief="离线改简报"))["revision"], 3)
         with self.assertRaisesRegex(ValueError, "缺失"):
             plan_cut(offline, "fixture", 2, "E1")
+
+    async def test_master_notes_survive_reopen_and_are_scoped_to_exact_review(self):
+        row = await self.accept()
+        await self.send_pending()
+        self.native.state = "completed"
+        await self.store.refresh(self.store.find(row["id"]))
+        master = {"job_id": row["id"], "file_index": 0}
+        clip = {**master, "duration_frames": 10, "start_frame": 0}
+        cut = {"rate": "24", "tracks": [{"kind": "Video", "clips": [clip]}]}
+        save_edit(self.store, "fixture", 0, cut)
+        delivery = {"revision": 1, "name": "Preview", "market": "Demo", "language": "und", "aspect": "9:16"}
+        register_delivery(self.store, "fixture", delivery)
+        spec = {"delivery": delivery, "master": master}
+        info = {"width": 288, "height": 512, "fps": 24, "frames": 10, "has_audio": False}
+        annotation = {"frame": 9, "note": "Check the wordmark", "region": [0.1, 0.2, 0.7, 0.6]}
+        with patch("localhub_delivery.inspect_media", return_value=(str(self.file), "video", info)):
+            binding = master_review(self.store, "fixture", spec, "read")["binding"]
+            payload = dict(spec, binding=binding, annotation=annotation)
+            for _ in range(2):
+                self.assertEqual(master_review(self.store, "fixture", payload, "save")["notes"], [annotation])
+            with self.assertRaises(ValueError):
+                master_review(self.store, "fixture", dict(payload, annotation=dict(annotation, frame=10)), "save")
+            alternate = dict(payload, placement="youtube-vertical-2026-11-20")
+            with self.assertRaises(RequestConflict):
+                master_review(self.store, "fixture", alternate, "save")
+            self.assertEqual(master_review(self.store, "fixture", alternate, "read")["notes"], [])
+            other = dict(delivery, name="Second delivery")
+            register_delivery(self.store, "fixture", other)
+            self.assertEqual(master_review(self.store, "fixture", dict(spec, delivery=other), "read")["notes"], [])
+        self.file.unlink()
+        reopened = ProjectDatabase(self.store.path)
+        history = list_master_reviews(reopened, "fixture")["reviews"]
+        self.assertEqual([(r["binding"], r["notes"]) for r in history], [(binding, [annotation])])
+        self.assertEqual(list_master_reviews(reopened, "other")["reviews"], [])
 
     async def test_relocate_delivery_and_detect_changed_media(self):
         row = await self.accept()

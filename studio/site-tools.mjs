@@ -27,7 +27,7 @@ const cut = {
 
 const supportsTools = (context) => typeof context?.registerTool === "function";
 
-export async function registerSiteTools(document, navigator, { read, save, readPlan, savePlan, preflightShot, submitShot, readJob, readFrameNotes }) {
+export async function registerSiteTools(document, navigator, { read, save, readPlan, savePlan, preflightShot, submitShot, readJob, readFrameNotes, readMasterReview }) {
   const modern = document.modelContext;
   const context = supportsTools(modern) ? modern : navigator.modelContext;
   if (!supportsTools(context)) return null;
@@ -62,6 +62,7 @@ export async function registerSiteTools(document, navigator, { read, save, readP
         timeline: cut,
       },
     },
+    annotations: { readOnlyHint: false },
     execute: execute(save),
   });
   if (readPlan && savePlan) {
@@ -82,6 +83,7 @@ export async function registerSiteTools(document, navigator, { read, save, readP
         expected_revision: { type: "integer", minimum: 0 },
         plan: { type: "object", description: "The updated plan including its saved episodes, scenes and shots." },
       } },
+      annotations: { readOnlyHint: false },
       execute: execute(savePlan),
     });
   }
@@ -94,6 +96,7 @@ export async function registerSiteTools(document, navigator, { read, save, readP
         properties: { revision: { type: "integer", minimum: 1 }, shot_id: { type: "string" },
           params: { type: "object", description: "Optional H3 parameters such as width, height, seed (a decimal string) and extra references." } },
       },
+      annotations: { readOnlyHint: true, untrustedContentHint: true },
       execute: execute(preflightShot),
     });
     await context.registerTool({
@@ -115,6 +118,14 @@ export async function registerSiteTools(document, navigator, { read, save, readP
       } },
       annotations: { readOnlyHint: true, untrustedContentHint: true },
       execute: execute(readJob),
+    });
+  }
+  if (readMasterReview) {
+    await context.registerTool({
+      name: "localhub_read_master_review",
+      description: "Read the checked delivery master, placement and its saved project notes. Returns the currently displayed frame and region when available.",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      annotations: { readOnlyHint: true, untrustedContentHint: true }, execute: execute(readMasterReview),
     });
   }
   if (readFrameNotes) {
