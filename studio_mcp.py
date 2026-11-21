@@ -8,7 +8,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 from uuid import UUID
 
 from mcp.server.fastmcp import FastMCP
-from mcp.types import ImageContent, ToolAnnotations
+from mcp.types import ImageContent, TextContent, ToolAnnotations
 from pydantic import BaseModel
 
 from localhub_project_plan import plan_cut, read_project_plan, save_project_plan
@@ -69,10 +69,10 @@ def localhub_find_projects(query: str = "") -> dict:
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
-def localhub_read_project(project: str = "本地项目") -> ProjectBoard:
-    """Read shot candidates and the saved cut revision for one project in Local Hub Studio."""
+def localhub_read_project(project: str = "本地项目", revision: int | None = None) -> ProjectBoard:
+    """Read current shot candidates alongside a saved cut. Omit revision for the latest cut."""
     jobs = bridge("jobs", project)["jobs"]
-    edit = bridge("timeline", project)
+    edit = bridge("timeline", project, **({"revision": revision} if revision is not None else {}))
     return ProjectBoard(**{
         "project": project,
         "studio": f"{base}/localhub/studio?{urlencode({'project': project})}",
@@ -137,6 +137,39 @@ def localhub_submit_shot(project: str, submission: dict) -> dict:
     if not isinstance(body, dict) or body.get("project") != project or not body.get("plan_shot") or not isinstance(key, str):
         raise ValueError("请使用当前项目的镜头预检回执")
     return bridge("jobs", project, body, method="POST", headers={"Idempotency-Key": key}, timeout=60)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, untrustedContentHint=True), structured_output=False)
+def localhub_compare_takes(project: str, revision: int, track_index: int, clip_index: int, job_id: str,
+                           file_index: int = 0, offset_frames: int = 0) -> list[TextContent | ImageContent]:
+    """Show two aligned frames for one saved video clip: A is in the cut, B is the proposed candidate.
+
+    Use zero-based track/clip indices from read_project. Offset is in project frames from the clip start.
+    Ask which project, clip or candidate the creator means if ambiguous. Present the frames and ask which
+    take to keep unless they already chose. Pass the binding unchanged to choose_take.
+    """
+    spec = dict(revision=revision, track_index=track_index, clip_index=clip_index, job_id=job_id,
+                file_index=file_index, offset_frames=offset_frames)
+    result = bridge("timeline/takes/preview", project, spec, method="POST", timeout=300)
+    takes = result.pop("takes")
+    content = [TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
+    for side, take in zip(("A", "B"), takes):
+        png = take.pop("png")
+        label = {"side": side, **take}
+        content.extend([TextContent(type="text", text=json.dumps(label, ensure_ascii=False)),
+                        ImageContent(type="image", mimeType="image/png", data=png)])
+    return content
+
+
+@mcp.tool(annotations=ToolAnnotations(destructiveHint=False))
+def localhub_choose_take(project: str, binding: dict, choice: str) -> dict:
+    """Apply the creator's explicit A/B choice to the single clip in the comparison receipt.
+
+    A retains the current edit. B saves a new revision with original timing. If stale, read the latest
+    edit and compare again. On a lost response read the cut before attempting another choice.
+    """
+    return bridge("timeline/takes/choose", project, {"binding": binding, "choice": choice},
+                  method="POST", timeout=120)
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, untrustedContentHint=True))

@@ -14,6 +14,32 @@ def file_stamp(path):
     return [stat.st_size, stat.st_mtime_ns]
 
 
+def media_sha256(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def video_frame_png(path, frame, ffmpeg):
+    if not ffmpeg:
+        raise NotImplementedError("抽取视频帧需要 FFmpeg")
+    if type(frame) is not int or frame < 0:
+        raise ValueError("视频帧号须为非负整数")
+    try:
+        raw = subprocess.run([ffmpeg, "-v", "error", "-nostdin", "-protocol_whitelist", "file",
+                              "-format_whitelist", "mov", "-i", str(path), "-map", "0:V:0",
+                              "-vf", f"select=eq(n\\,{frame})", "-frames:v", "1",
+                              "-c:v", "png", "-f", "image2pipe", "-"], capture_output=True,
+                             timeout=120, check=True).stdout
+    except subprocess.SubprocessError as exc:
+        raise ValueError("无法解码所选视频帧") from exc
+    if not raw:
+        raise ValueError("视频未解出该帧")
+    return raw
+
+
 def candidate_file(path, info):
     path = Path(path)
     try:

@@ -13,6 +13,7 @@
 !/h3_graph.py
 !/legacy_canvas.py
 !/localhub_audio_qc.py
+!/localhub_compare.py
 !/localhub_copy.py
 !/localhub_delivery.py
 !/localhub_jobs.py

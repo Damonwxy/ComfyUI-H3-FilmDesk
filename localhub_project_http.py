@@ -13,6 +13,7 @@ from aiohttp import web
 import ffmpeg_tools
 from legacy_canvas import read_archives
 from localhub_audio_qc import REPORT_VERSION, inspect_audio, inspect_cut_audio
+from localhub_compare import compare_takes
 from localhub_copy import list_copy, update_copy
 from localhub_delivery import describe_video_sources, verify_master
 from localhub_master_review import list_master_reviews, master_review
@@ -258,6 +259,27 @@ async def e_cut_audio(request):
         return _err(400, str(exc))
 
 
+async def e_compare_takes(request):
+    try:
+        project = _label(request.query.get("project"), "project")
+        spec = await _body(request)
+        choice = None
+        if request.match_info["action"] == "choose":
+            if not isinstance(spec, dict) or spec.get("choice") not in ("A", "B"):
+                raise ValueError("请选择 A 或 B")
+            choice, spec = spec["choice"], spec.get("binding")
+        result = await asyncio.to_thread(compare_takes, _context(request).jobs(), project, spec, choice)
+        return _ok(result)
+    except RequestConflict as exc:
+        return _err(409, str(exc))
+    except LookupError as exc:
+        return _err(404, str(exc))
+    except NotImplementedError as exc:
+        return _err(501, str(exc))
+    except (ValueError, OSError) as exc:
+        return _err(400, str(exc))
+
+
 async def e_timeline(request):
     try:
         project = _label(request.query.get("project"), "project", "本地项目")
@@ -491,6 +513,7 @@ def register_project_routes(app, table, *, jobs, input_directory, generation_ena
     table.post("/localhub/v2/jobs/{job_id}/media/{index}/audio-qc")(j_audio_qc)
     table.get("/localhub/v2/timeline")(e_timeline)
     table.get("/localhub/v2/timeline/audio-qc")(e_cut_audio)
+    table.post("/localhub/v2/timeline/takes/{action:preview|choose}")(e_compare_takes)
     table.get("/localhub/v2/plan")(e_project_plan)
     table.put("/localhub/v2/plan")(e_project_plan)
     table.get("/localhub/v2/plan/cut")(e_project_plan)

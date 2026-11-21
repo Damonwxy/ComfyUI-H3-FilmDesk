@@ -1,13 +1,11 @@
 """Persist review notes against the delivery and the bytes of its reviewed master."""
 
 import base64
-import hashlib
 import json
-import subprocess
 
 import ffmpeg_tools
 from localhub_delivery import verify_master
-from localhub_media import file_stamp
+from localhub_media import file_stamp, media_sha256, video_frame_png
 from localhub_storage import RequestConflict
 from localhub_timeline import list_deliveries, require_delivery
 
@@ -49,11 +47,7 @@ def master_review(jobs, project, spec, action):
         raise ValueError("该参考版式不适用于当前交付")
     path, stamp, info = verify_master(jobs, project, cut, delivery["aspect"], spec.get("master"),
                                       None, ffmpeg_tools.locate_ffprobe())
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    master = {"job_id": info["job_id"], "file_index": info["file_index"], "sha256": digest.hexdigest()}
+    master = {"job_id": info["job_id"], "file_index": info["file_index"], "sha256": media_sha256(path)}
     scope = {"project": project, "delivery": delivery, "master": master, "placement": placement}
     binding = json.dumps(scope, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     if action != "read" and spec.get("binding") != binding:
@@ -63,19 +57,7 @@ def master_review(jobs, project, spec, action):
         frame = spec.get("frame")
         if type(frame) is not int or not 0 <= frame < info["frames"]:
             raise ValueError("帧号超出成片范围")
-        ffmpeg = ffmpeg_tools.locate_ffmpeg()
-        if not ffmpeg:
-            raise NotImplementedError("抽取母版帧需要 FFmpeg")
-        try:
-            raw = subprocess.run([ffmpeg, "-v", "error", "-nostdin", "-protocol_whitelist", "file",
-                                  "-format_whitelist", "mov", "-i", str(path), "-map", "0:V:0",
-                                  "-vf", f"select=eq(n\\,{frame})", "-frames:v", "1",
-                                  "-c:v", "png", "-f", "image2pipe", "-"], capture_output=True,
-                                 timeout=120, check=True).stdout
-        except subprocess.SubprocessError as exc:
-            raise ValueError("无法解码所选母版帧") from exc
-        if not raw:
-            raise ValueError("母版未解出该帧")
+        raw = video_frame_png(path, frame, ffmpeg_tools.locate_ffmpeg())
         result.update(frame=frame, png=base64.b64encode(raw).decode("ascii"))
     if file_stamp(path) != stamp:
         raise RequestConflict("核对时母版文件已变动，请重新打开")

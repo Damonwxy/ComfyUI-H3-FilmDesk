@@ -19,6 +19,7 @@ from PIL import Image
 from delivery_pack import make_pack, relink_pack
 from legacy_canvas import archive_canvas, read_archives
 from localhub_audio_qc import inspect_audio, inspect_cut_audio
+from localhub_compare import compare_takes
 from localhub_copy import list_copy, update_copy
 from localhub_jobs import Jobs, RequestConflict
 from localhub_master_review import list_master_reviews, master_review
@@ -296,6 +297,45 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(save_project_plan(offline, "fixture", 2, dict(plan, brief="离线改简报"))["revision"], 3)
         with self.assertRaisesRegex(ValueError, "缺失"):
             plan_cut(offline, "fixture", 2, "E1")
+
+    def test_take_choice_checks_reviewed_files_and_preserves_other_clip_occurrences(self):
+        media = []
+        for name in ("A", "B"):
+            path = self.root / (name + ".mp4")
+            path.write_bytes(name.encode())
+            job = self.store.register_media("ad", name, str(path), "video", {"frames": 120})[0]
+            media.append(job["id"])
+        rate = "24000/1001"
+        clip = dict(job_id=media[0], file_index=0, start_frame=3, duration_frames=9, rate=rate)
+        cut = {"rate": rate, "tracks": [{"kind": "Video", "clips": [clip, clip]}]}
+        original = save_edit(self.store, "ad", 0, cut)["timeline"]
+        spec = dict(revision=1, track_index=0, clip_index=1, job_id=media[1], file_index=0, offset_frames=2)
+        info = {"fps": "48000/1001", "frames": 24}
+        def probe(path, ffprobe):
+            return str(path), "video", info if path.stem == "B" else {"fps": rate, "frames": 12}
+        with patch("localhub_compare.inspect_media", side_effect=probe), patch("localhub_compare.video_frame_png", return_value=b"x"):
+            preview = compare_takes(self.store, "ad", spec)
+            self.assertEqual([take["source_frame"] for take in preview["takes"]], [5, 10])
+            receipt = preview["binding"]
+            self.assertEqual(compare_takes(self.store, "ad", receipt, "A")["revision"], 1)
+            (self.root / "B.mp4").write_bytes(b"changed")
+            with self.assertRaises(RequestConflict):
+                compare_takes(self.store, "ad", receipt, "B")
+            info["fps"] = 24
+            with self.assertRaisesRegex(ValueError, "精确对齐"):
+                compare_takes(self.store, "ad", spec)
+            info.update(fps="48000/1001", frames=23)
+            with self.assertRaisesRegex(ValueError, "太短"):
+                compare_takes(self.store, "ad", spec)
+            info["frames"] = 24
+            receipt = compare_takes(self.store, "ad", spec)["binding"]
+            self.assertEqual(compare_takes(self.store, "ad", receipt, "B")["revision"], 2)
+            with self.assertRaises(RequestConflict):
+                compare_takes(self.store, "ad", receipt, "B")
+        self.assertEqual(read_edit(self.store, "ad", 1)["timeline"], original)
+        first, second = read_edit(self.store, "ad", 2)["timeline"]["tracks"][0]["clips"]
+        self.assertEqual(first, clip)
+        self.assertEqual(second, dict(job_id=media[1], file_index=0, start_frame=6, duration_frames=18, rate="48000/1001"))
 
     async def test_master_notes_survive_reopen_and_are_scoped_to_exact_review(self):
         row = await self.accept()
