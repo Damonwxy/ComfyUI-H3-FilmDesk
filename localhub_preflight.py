@@ -23,11 +23,10 @@ def _video_range(ref, limit):
 
     path = Path(folder_paths.get_input_directory()) / ref["input"]
     try:
-        result = subprocess.run([locate_ffmpeg(), "-nostdin", "-v", "error", "-progress", "pipe:1",
-                                 "-i", str(path), "-map", "0:v:0", "-c:v", "copy", "-f", "null", "-"],
+        result = subprocess.run([locate_ffmpeg(), "-nostdin", "-v", "error", "-i", str(path),
+                                 "-map", "0:v:0", "-c:v", "copy", "-f", "framecrc", "pipe:1"],
                                 capture_output=True, check=True, timeout=30)
-        counts = re.findall(rb"^frame=(\d+)\s*$", result.stdout, re.MULTILINE)
-        prepared = int(counts[-1]) if counts else 0
+        prepared = sum(line.startswith(b"0,") for line in result.stdout.splitlines())
     except (subprocess.SubprocessError, OSError) as exc:
         raise ValueError(f"{ref['tag']} 无法读取已转换参考视频的帧数") from exc
     available = min(prepared, limit)
