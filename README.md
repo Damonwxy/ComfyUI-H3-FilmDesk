@@ -58,4 +58,8 @@ node --test tests/compare_cut.test.mjs
 node --test tests/compare_cut.test.mjs tests/site_tools.test.mjs
 ```
 
-代码的开放源代码许可证待定。
+## 商业使用
+
+FilmDesk 采用自定义的[商用一次通知许可](LICENSE)。公司内部做片、为客户制作收费广告、闭源集成或提供在线服务都可以。首次商用时由个人或单位通知维护者一次，发出即完成。以后换项目、升级到沿用同一许可的版本或改变用途，都可继续使用。非商业学习和试用无需通知。
+
+可以直接[发送商用通知](https://github.com/Damonwxy/ComfyUI-H3-FilmDesk/issues/new?title=FilmDesk%20commercial%20use&body=We%20at%20%5Bcompany%20name%5D%20have%20started%20using%20FilmDesk%20commercially.)，例如“示例公司已开始商用 FilmDesk”。Issues 对公众可见；已有维护者私下联系方式的团队也可以私下通知。无需提交客户、项目或收入信息。ComfyUI、模型和素材的许可分别适用。
