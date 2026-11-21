@@ -870,6 +870,47 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
                     submitted = dict(options, plan_sha256=report["plan_sha256"], take=report["take"])
                     self.assertEqual(confirm_plan("ad", "S01", submitted)[1]["preflight"], report)
 
+    @unittest.skipUnless(shutil.which("ffprobe") and shutil.which("ffmpeg"), "FFmpeg and ffprobe are required")
+    def test_control_preflight_uses_original_frame_indices_and_binds_input(self):
+        from localhub_media import video_frame_png
+        from localhub_preflight import compile_plan, confirm_plan
+
+        models = dict(unet="model", text_encoder="enc", video_vae="video", audio_vae="audio", model_patch="patch")
+        source = self.root / "depth.mkv"
+        params = dict(models=models, control_video=str(source), prompt="Orbit", duration_s=3, seed=7)
+        active = types.SimpleNamespace(get_input_directory=lambda: str(self.root))
+        with patch.dict(sys.modules, {"folder_paths": active}):
+            previous = None
+            for count, rate in [(1, 24), (72, 12), (73, 24), (80, 24)]:
+                with self.subTest(count=count):
+                    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                                    f"testsrc2=size=64x48:rate={rate}", "-frames:v", str(count),
+                                    "-c:v", "ffv1", str(source)], check=True)
+                    graph, info = compile_plan("ad", "S01", params, None)
+                    span = info["preflight"]["control_range"]
+                    self.assertEqual(span, dict(tag="控制视频", source_frames=count, source_avg_fps=str(rate),
+                        target_frames=73, last_frame=min(count, 73)-1, repeated_frames=max(0, 73-count),
+                        dropped_frames=max(0, count-73)))
+                    self.assertEqual(bool(info["preflight"]["warnings"]), rate != 24)
+                    self.assertEqual(graph["9"]["inputs"]["model"], ["43", 0])
+                    copied = self.root / graph["40"]["inputs"]["file"]
+                    self.assertEqual(copied.read_bytes(), source.read_bytes())
+                    self.assertTrue(video_frame_png(copied, span["last_frame"], "ffmpeg",
+                                                    thumbnail=True, control=True).startswith(b"\x89PNG"))
+                    if previous:
+                        with self.assertRaises(RequestConflict):
+                            confirm_plan("ad", "S01", previous)
+                    previous = dict(params, take=info["preflight"]["take"], plan_sha256=info["preflight"]["plan_sha256"])
+                    self.assertEqual(confirm_plan("ad", "S01", previous)[1]["preflight"], info["preflight"])
+            with self.assertRaises(RequestConflict):
+                confirm_plan("ad", "S01", dict(previous, control_strength=0.5))
+            _, info = compile_plan("ad", "S01", dict(params, control_strength=0), None)
+            self.assertNotIn("control_range", info["preflight"])
+            self.assertTrue(info["preflight"]["warnings"])
+            for changes in [dict(control_strength=float("nan")), dict(control_end=0.2, control_start=0.8)]:
+                with self.assertRaisesRegex(ValueError, "控制强度"):
+                    compile_plan("ad", "S01", dict(params, **changes), None)
+
     def test_reviewed_preflight_binds_take_and_reference_content(self):
         active = types.SimpleNamespace(get_input_directory=lambda: str(self.root))
         source = self.root / "frame.png"

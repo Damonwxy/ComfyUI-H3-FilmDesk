@@ -1354,7 +1354,8 @@ function preparePlannedGeneration(revision, rate, shot) {
   if (form.elements.prompt.value && !confirm("用所选编排镜头替换当前生成草稿？")) return;
   const [numerator, denominator = 1] = String(rate).split("/");
   const fields = form.elements;
-  for (const key of ["ref_images", "ref_videos", "ref_audios", "take_start", "take_end"]) fields[key].value = "";
+  for (const key of ["ref_images", "ref_videos", "ref_audios", "control_video", "take_start", "take_end"]) fields[key].value = "";
+  fields.control_strength.value = fields.control_strength.defaultValue;
   el("registered-reference").value = "";
   el("reference-role").value = "reference";
   fields.shot.value = shot.title;
@@ -1398,6 +1399,11 @@ function generationDraft(form) {
     } else {
       params.ref_images.unshift(reference);
     }
+  }
+  const controlVideo = fields.get("control_video").trim();
+  if (controlVideo) {
+    params.control_video = controlVideo;
+    params.control_strength = Number(fields.get("control_strength") || 1);
   }
   params.mode ??= params.ref_images.length || params.ref_audios.length || params.ref_videos.length ? "r2v" : "t2v";
   const body = { project: state.project, shot: fields.get("shot"), kind: "video", params };
@@ -1452,15 +1458,24 @@ function renderPlan(info, previews = []) {
     panel.append(refs);
   }
   for (const warning of warnings) panel.append(node("p", warning));
-  for (const span of info.preflight.video_ranges || []) {
+  function showEnd(span, summary) {
     const figure = node("figure");
-    const dropped = span.prepared_frames - span.end_frame;
-    const summary = span.tag + " · 转为 24 fps 并限长后共 " + span.prepared_frames + " 帧，画面采用第 0–"
-      + span.last_frame + " 帧" + (dropped ? "，末尾 " + dropped + " 帧未采用。" : "。");
     figure.append(node("figcaption", summary));
     panel.append(figure);
     const preview = previews.find(item => item.tag === span.tag);
     if (preview) displayReferenceEnd(figure, preview.png);
+  }
+  for (const span of info.preflight.video_ranges || []) {
+    const dropped = span.prepared_frames - span.end_frame;
+    showEnd(span, span.tag + " · 转为 24 fps 并限长后共 " + span.prepared_frames + " 帧，画面采用第 0–"
+      + span.last_frame + " 帧" + (dropped ? "，末尾 " + dropped + " 帧未采用。" : "。"));
+  }
+  const control = info.preflight.control_range;
+  if (control) {
+    let summary = "控制片共 " + control.source_frames + " 帧，按原帧顺序采用第 0–" + control.last_frame + " 帧。";
+    if (control.repeated_frames) summary += "末帧再保持 " + control.repeated_frames + " 帧。";
+    if (control.dropped_frames) summary += "末尾 " + control.dropped_frames + " 帧超出生成时长。";
+    showEnd(control, summary + "图为最后采用的原片画面，模型会按镜头比例居中裁切。");
   }
 }
 
