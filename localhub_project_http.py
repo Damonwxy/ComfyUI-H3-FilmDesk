@@ -12,7 +12,7 @@ from aiohttp import web
 
 import ffmpeg_tools
 from legacy_canvas import read_archives
-from localhub_audio_qc import REPORT_VERSION, inspect_audio
+from localhub_audio_qc import REPORT_VERSION, inspect_audio, inspect_cut_audio
 from localhub_copy import list_copy, update_copy
 from localhub_delivery import describe_video_sources, verify_master
 from localhub_master_review import list_master_reviews, master_review
@@ -238,6 +238,24 @@ async def j_audio_qc(request):
             return _err(400, str(exc))
         service.save_audio_report(job_id, index, stamp, report)
     return _ok({"report": report})
+
+
+async def e_cut_audio(request):
+    try:
+        project = _label(request.query.get("project"), "project")
+        track = request.query.get("track_index")
+        report = await asyncio.to_thread(inspect_cut_audio, _context(request).jobs(), project,
+                                         _revision(request.query), ffmpeg_tools.locate_ffmpeg(),
+                                         ffmpeg_tools.locate_ffprobe(), int(track) if track is not None else None)
+        return _ok({"report": report})
+    except RequestConflict as exc:
+        return _err(409, str(exc))
+    except LookupError as exc:
+        return _err(404, str(exc))
+    except NotImplementedError as exc:
+        return _err(501, str(exc))
+    except (ValueError, OSError) as exc:
+        return _err(400, str(exc))
 
 
 async def e_timeline(request):
@@ -472,6 +490,7 @@ def register_project_routes(app, table, *, jobs, input_directory, generation_ena
     table.post("/localhub/v2/jobs/{job_id}/media/{index}/frame-notes")(j_frame_notes)
     table.post("/localhub/v2/jobs/{job_id}/media/{index}/audio-qc")(j_audio_qc)
     table.get("/localhub/v2/timeline")(e_timeline)
+    table.get("/localhub/v2/timeline/audio-qc")(e_cut_audio)
     table.get("/localhub/v2/plan")(e_project_plan)
     table.put("/localhub/v2/plan")(e_project_plan)
     table.get("/localhub/v2/plan/cut")(e_project_plan)

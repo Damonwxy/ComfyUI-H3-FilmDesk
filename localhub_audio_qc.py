@@ -5,7 +5,9 @@ import math
 import re
 import subprocess
 from fractions import Fraction
-from localhub_media import stream_bounds
+from localhub_media import file_stamp, stream_bounds
+from localhub_storage import RequestConflict
+from localhub_timeline import clip_path, read_edit
 
 
 REPORT_VERSION = 1
@@ -64,7 +66,8 @@ def _measurements(log, duration):
     }
 
 
-def inspect_audio(path, ffmpeg, ffprobe):
+def inspect_audio(path, ffmpeg, ffprobe, *, source_range=None):
+    """Measure the whole file or a half-open range in seconds from the first audio sample."""
     if not ffmpeg or not ffprobe:
         raise NotImplementedError("音频质检需要 FFmpeg 和 ffprobe")
     result = _run(ffprobe, [
@@ -93,14 +96,26 @@ def inspect_audio(path, ffmpeg, ffprobe):
             duration = float(int(audio["duration_ts"]) * Fraction(audio["time_base"]))
         except (KeyError, ValueError, TypeError, ZeroDivisionError):
             pass
-    filters = ("asetpts=PTS-STARTPTS,ebur128=framelog=verbose:peak=true,"
-               "astats=metadata=0:reset=0:measure_perchannel=none:measure_overall=Peak_level+Peak_count,"
+    trim = ""
+    if source_range is not None:
+        hz = int(audio["sample_rate"])
+        start, end = (math.ceil(t * hz) for t in source_range)
+        if end <= start:
+            raise ValueError("声音取用区间不足一个采样")
+        trim = f"atrim=start_sample={start}:end_sample={end},"
+        duration = (end - start) / hz
+    filters = (trim + "asetpts=PTS-STARTPTS,ebur128=framelog=verbose:peak=true,"
+               "astats=metadata=0:reset=0:measure_perchannel=none:measure_overall=Peak_level+Peak_count+Number_of_samples,"
                f"silencedetect=noise={SILENCE_DBFS}dB:d={SILENCE_MIN_SECONDS}")
     measured = _run(ffmpeg, [
         "-hide_banner", "-nostdin", "-v", "info", *_LOCAL_INPUT, "-i", str(path),
         "-map", "0:a:0", "-af", filters, "-f", "null", "-",
     ], timeout=90)
     metrics = _measurements(measured.stderr, duration)
+    if source_range is not None:
+        count = re.search(r"Number of samples:\s*(\d+)", measured.stderr)
+        if count is None or int(count[1]) != end - start:
+            raise ValueError("实际解码的采样数与剪版取用范围不符，请核对素材时长")
     report["audio"] = {"channels": audio.get("channels"), "sample_rate": int(audio["sample_rate"]),
                        "duration_s": round(duration, 6) if duration is not None else None, **metrics}
     dbfs, dbtp = metrics["sample_peak_dbfs"], metrics["true_peak_dbtp"]
@@ -116,7 +131,7 @@ def inspect_audio(path, ffmpeg, ffprobe):
         flags.append("extended_silence")
     if len(audios) > 1:
         flags.append("multiple_audio_streams")
-    if video is not None:
+    if video is not None and source_range is None:
         picture_bounds = stream_bounds(video)
         if bounds is None or picture_bounds is None:
             flags.append("timing_unavailable")
@@ -133,3 +148,50 @@ def inspect_audio(path, ffmpeg, ffprobe):
                 flags.append("av_timing")
     report["status"] = "review" if flags else "pass"
     return report
+
+
+def inspect_cut_audio(jobs, project, revision, ffmpeg, ffprobe, track_index=None):
+    """Inspect explicit audio edits in their own track clocks, including repeated uses of one file."""
+    if type(revision) is not int or not 1 <= revision < 2**63:
+        raise ValueError("请指定已保存的剪版号")
+    cut = read_edit(jobs, project, revision)["timeline"]
+    tracks = cut["tracks"]
+    if track_index is not None and (type(track_index) is not int or not 0 <= track_index < len(tracks)
+                                    or tracks[track_index]["kind"] != "Audio"):
+        raise ValueError("请选择剪版中的声音轨道序号")
+    rate = Fraction(cut["rate"])
+    segments = []
+    reports = {}
+    for index, track in enumerate(tracks):
+        if track["kind"] != "Audio" or (track_index is not None and index != track_index):
+            continue
+        cursor = Fraction(0)
+        for position, clip in enumerate(track["clips"]):
+            clip_rate = Fraction(clip.get("rate", rate))
+            duration = clip["duration_frames"] / clip_rate
+            end = cursor + duration
+            segment = {"track_index": index, "track": track["name"], "clip_index": position,
+                       "start_frame": math.floor(cursor * rate), "end_frame": math.ceil(end * rate)}
+            segments.append(segment)
+            if clip.get("gap"):
+                segment["gap"] = True
+            else:
+                path, row = clip_path(jobs, project, clip["job_id"], clip["file_index"])
+                stamp = tuple(file_stamp(path))
+                source_start = clip["start_frame"] / clip_rate
+                key = (path, stamp, source_start, duration)
+                if key not in reports:
+                    reports[key] = inspect_audio(path, ffmpeg, ffprobe, source_range=(source_start, source_start + duration))
+                if tuple(file_stamp(path)) != stamp:
+                    raise RequestConflict("候选在质检时已变动，请刷新后重试")
+                report = reports[key]
+                segment.update(source=clip, shot=row["shot"], flags=report["flags"], audio=report["audio"])
+                segment["silent_ranges"] = [
+                    {"start_frame": math.floor((cursor + Fraction(str(span["start_s"]))) * rate),
+                     "end_frame": math.ceil(min(end, cursor + Fraction(str(span["end_s"]))) * rate)}
+                    for span in (report["audio"] or {}).get("silent_ranges", [])
+                ]
+            cursor = end
+    checked = [s for s in segments if not s.get("gap")]
+    return {"project": project, "revision": revision, "rate": cut["rate"], "segments": segments,
+            "status": ("no_audio_clips" if not checked else "review" if any(s["flags"] for s in checked) else "pass")}

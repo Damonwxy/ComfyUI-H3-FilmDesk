@@ -18,7 +18,7 @@ from PIL import Image
 
 from delivery_pack import make_pack, relink_pack
 from legacy_canvas import archive_canvas, read_archives
-from localhub_audio_qc import inspect_audio
+from localhub_audio_qc import inspect_audio, inspect_cut_audio
 from localhub_copy import list_copy, update_copy
 from localhub_jobs import Jobs, RequestConflict
 from localhub_master_review import list_master_reviews, master_review
@@ -844,6 +844,33 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(read_edit(self.store, "ad"), latest)
         with self.assertRaises(LookupError):
             read_edit(self.store, "ad", 3)
+
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg and ffprobe are required")
+    def test_cut_audio_measures_only_used_samples_and_maps_gaps_and_repeated_clips(self):
+        source = self.root / "dialogue.wav"
+        with wave.open(str(source), "wb") as wav:
+            wav.setparams((1, 2, 48000, 0, "NONE", "not compressed"))
+            tone = (b"\x00\x20" * 48 + b"\x00\xe0" * 48) * 500
+            wav.writeframes(bytes(96000) + tone)
+        path, kind, info = probe_media(self.root, source.name, "ffprobe")
+        job = self.store.register_media("dialogue", "S02", path, kind, info)[0]
+        clip = dict(job_id=job["id"], file_index=0, rate="48", duration_frames=48, start_frame=48)
+        gap = dict(gap=True, duration_frames=6)
+        cut = dict(rate="24", tracks=[dict(kind="Audio", name="对白", clips=[gap, clip, dict(clip, start_frame=0)])])
+        save_edit(self.store, "dialogue", 0, cut)
+        cut["tracks"][0]["clips"] = [clip]
+        save_edit(self.store, "dialogue", 1, cut)
+        report = inspect_cut_audio(self.store, "dialogue", 1, "ffmpeg", "ffprobe")
+        lead, spoken, silent = report["segments"]
+        self.assertTrue(lead["gap"])
+        self.assertEqual((spoken["start_frame"], spoken["end_frame"]), (6, 30))
+        self.assertEqual(spoken["silent_ranges"], [])
+        self.assertIn("no_signal", silent["flags"])
+        self.assertEqual(silent["silent_ranges"], [dict(start_frame=30, end_frame=54)])
+        updated = inspect_cut_audio(self.store, "dialogue", 2, "ffmpeg", "ffprobe", track_index=0)
+        self.assertEqual(updated["status"], "pass")
+        with self.assertRaises(ValueError):
+            inspect_cut_audio(self.store, "dialogue", 2, "ffmpeg", "ffprobe", track_index=1)
 
     @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg and ffprobe are required")
     def test_audio_report_detects_full_scale_silence_and_timing(self):

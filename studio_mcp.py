@@ -140,6 +140,48 @@ def localhub_submit_shot(project: str, submission: dict) -> dict:
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, untrustedContentHint=True))
+def localhub_check_cut_audio(project: str, revision: int, track_index: int | None = None) -> dict:
+    """Measure the used audio ranges of a saved cut, one clip at a time. Check the dialogue track when known.
+
+    Track indices refer to the full saved timeline. Results use zero-based, end-exclusive cut frames.
+    Silence has localized spans. Peak and loudness flags apply to the reported clip range.
+    Gaps are editorial choices. Speech intelligibility and final mix loudness require separate review.
+    """
+    if database:
+        import ffmpeg_tools
+        from localhub_audio_qc import inspect_cut_audio
+        return inspect_cut_audio(ProjectDatabase(database), project, revision, ffmpeg_tools.locate_ffmpeg(),
+                                 ffmpeg_tools.locate_ffprobe(), track_index)
+    query = {"revision": revision}
+    if track_index is not None:
+        query["track_index"] = track_index
+    return bridge("timeline/audio-qc", project, timeout=600, **query)["report"]
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, untrustedContentHint=True))
+def localhub_check_delivery_master(project: str, delivery: dict, master: dict, master_profile: dict | None = None) -> dict:
+    """Check a registered MP4/MOV against this delivery and list source resolutions.
+
+    Use a job_id and file_index from read_project. Pass width and height in master_profile when required;
+    it can also specify video_codec, pixel_format, audio_codec, audio_sample_rate and audio_channels.
+    """
+    return bridge("deliveries/master-check", project, {"delivery": delivery, "master": master,
+                  "master_profile": master_profile}, method="POST", timeout=120)
+
+
+@mcp.tool(annotations=ToolAnnotations(destructiveHint=False, idempotentHint=True, untrustedContentHint=True))
+def localhub_prepare_delivery(project: str, revision: int, name: str, market: str, language: str, aspect: str) -> dict:
+    """Register a delivery for an exact saved cut, e.g. aspect 9:16, and return its pinned subtitle sheet.
+
+    This prepares the specification. Rendering and master verification are separate steps.
+    """
+    delivery = bridge("deliveries", project, {"revision": revision, "name": name, "market": market,
+                      "language": language, "aspect": aspect}, method="POST")["delivery"]
+    sheet = bridge("deliveries/subtitles", project, **delivery)["sheet"]
+    return {"delivery": delivery, "subtitles": sheet}
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, untrustedContentHint=True))
 def localhub_list_master_reviews(project: str) -> dict:
     """Find registered deliveries and saved master-frame notes for a project, including historical cuts."""
     if database:
