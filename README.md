@@ -49,6 +49,10 @@ py -3.12 -m venv .venv
 
 在制作台为已有剪版登记交付，选择对应的母版文件并核对规格。展开「在母版画面上审片」，输入从 0 起算的成片帧号，点「查看此帧」，可选中两个对角点再保存意见。意见随项目记录交付规格、剪版、母版文件摘要和审片版式。
 
+要交接字标或包装意见，可以说「这条意见以包装稿 v2 为准，核准人是……，确认记录是……」。Codex 用 `localhub_list_reference_images` 找到项目内的具体图版；有多个候选时请你选择。已放在 `input/localhub_media` 的 PNG、JPEG 或 WebP 可用 `localhub_register_reference_image` 登记。矢量原稿可用其核准的栅格导出图做画面对照，核准依据里写明对应原稿。
+
+在确有核准记录时，`localhub_link_review_artwork` 将图版、文件摘要、核准人和依据附在原批注上。换对话后用 `localhub_list_master_reviews` 读回 `artwork_history`，再把其中的 `reference` 交给 `localhub_read_reference_image` 看原图。登记同名字稿的新版本会保留原关联。若明确改用另一版，添加新的关联记录；提交修订与人工复核都传该意见当前的 `artwork_version`（关联版号）。制作台母版意见下也可查看这些依据。
+
 换到新的 Codex 会话后，可用 `localhub_list_master_reviews` 找回意见。有多个交付或母版符合描述时，先请创作者选择。用 `localhub_read_master_review` 取得所选母版的回执，`localhub_read_master_frame` 可把指定帧以 PNG 图像带进对话，`localhub_save_master_note` 保存整帧或选区意见。读取历史意见可直连本机项目库，取图和新增意见需要本机制作台或桥接服务在线。
 
 有修改要交回时，可以说「把 v2 的第 73 帧交给这条意见复看」。`localhub_submit_master_fix` 将旧意见（含原帧和选区）连接到修订母版和指定帧，并记下改了什么。制作台的原意见下会出现「待复看」，展开即可看修订帧。创作者看过并明确表示接受或需要再改后，`localhub_record_master_verdict` 才记录这项决定、复看者称呼和反馈。每次提交或复核都会追加一条记录，可从旧意见追到后续各版。

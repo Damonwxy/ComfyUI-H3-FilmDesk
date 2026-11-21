@@ -53,6 +53,7 @@ export function initMasterReview({ el, node, send }) {
     const details = node("details");
     details.append(node("summary", states[event.state] + " · " + label));
     details.append(node("p", (event.reviewer ? event.reviewer + " · " : "") + event.comment));
+    if (event.artwork_version) details.append(node("p", "本次复核依据 · 关联记录 " + event.artwork_version));
     const message = node("p");
     message.setAttribute("role", "status");
     details.append(message);
@@ -83,18 +84,20 @@ export function initMasterReview({ el, node, send }) {
     };
     return details;
   }
-  function history(notes, followups = []) {
+  function history(notes, followups = [], artworks = []) {
     const list = el("mr-history"); list.replaceChildren();
     if (!notes.length) list.textContent = "这份母版在当前版式下暂无意见。";
     for (const item of notes) {
       const button = node("button", "第 " + item.frame + " 帧 · " + item.note);
       button.type = "button"; button.onclick = () => { position.value = item.frame; locate(item); };
       list.append(button);
-      for (const event of followups) {
-        const source = event.annotation;
-        if (item.frame === source.frame && item.note === source.note &&
-            JSON.stringify(item.region) === JSON.stringify(source.region)) list.append(revisionLink(event));
+      const matches = ({annotation}) => item.frame === annotation.frame && item.note === annotation.note &&
+        JSON.stringify(item.region) === JSON.stringify(annotation.region);
+      for (const record of artworks.filter(matches)) {
+        list.append(node("p", "字稿依据 " + record.version + " · " + record.reference.asset_id + " v"
+          + record.reference.revision + " · " + record.approved_by + " · " + record.approval_record));
       }
+      for (const event of followups.filter(matches)) list.append(revisionLink(event));
     }
   }
   function box(coords, color, dash = []) {
@@ -123,7 +126,7 @@ export function initMasterReview({ el, node, send }) {
     try {
       const review = await call("read");
       if (seq !== generation) return;
-      binding = review.binding; history(review.notes, review.followups); position.max = review.frames-1;
+      binding = review.binding; history(review.notes, review.followups, review.artwork_history); position.max = review.frames-1;
       const still = await call("frame", {frame});
       if (seq !== generation) return;
       const bitmap = await decodeFrame(still.png);
@@ -174,7 +177,7 @@ export function initMasterReview({ el, node, send }) {
     try {
       const result = await call("save",{annotation});
       if (seq !== generation) return;
-      history(result.notes, result.followups); status("第 " + selected + " 帧的意见已保存到项目。");
+      history(result.notes, result.followups, result.artwork_history); status("第 " + selected + " 帧的意见已保存到项目。");
     } catch (error) { if (seq === generation) status(error.message); }
     finally { if (seq === generation) { busy = false; controls(); } }
   };

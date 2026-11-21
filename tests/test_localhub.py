@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import os
 import shutil
@@ -22,10 +23,10 @@ from localhub_audio_qc import inspect_audio, inspect_cut_audio
 from localhub_compare import compare_takes
 from localhub_copy import list_copy, update_copy
 from localhub_jobs import Jobs, RequestConflict
-from localhub_master_review import list_master_reviews, master_review, record_followup
+from localhub_master_review import link_artwork, list_master_reviews, master_review, record_followup
 from localhub_media import file_stamp, probe_media
 from localhub_project_plan import bind_h3_shot, plan_cut, read_project_plan, save_project_plan
-from localhub_references import list_references, register_reference, resolve_reference
+from localhub_references import list_references, read_reference_image, register_reference, resolve_reference
 from localhub_storage import ProjectDatabase
 from localhub_subtitles import read_subtitles, save_subtitles, subtitle_srt
 from localhub_timeline import _draft_span, export_otio, import_otio, list_deliveries, read_edit, register_delivery, save_edit
@@ -425,6 +426,68 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([e["state"] for e in reviews[0]["followups"]],
                          ["submitted","changes_requested","submitted","accepted"])
         self.assertEqual(reviews[0]["followups"][-1]["target_binding"], b)
+
+    def test_approved_artwork_stays_with_exact_note_and_followup(self):
+        project = "packaging"
+        note = dict(frame=3, note="Check label", region=[0, 0, .4, .4])
+        specs = []
+        for revision in (1, 2):
+            path = self.root / f"master{revision}.mp4"
+            path.write_bytes(bytes([revision]))
+            job, _ = self.store.register_media(project, path.stem, str(path), "video", {"frames": 12})
+            master = dict(job_id=job["id"], file_index=0)
+            clip = dict(master, start_frame=0, duration_frames=12)
+            save_edit(self.store, project, revision-1, dict(rate="24", tracks=[dict(kind="Video", clips=[clip])]))
+            delivery = register_delivery(self.store, project, dict(name="AD", aspect="16:9", market="Demo",
+                                                                  language="und", revision=revision))
+            specs.append(dict(master=master, delivery=delivery))
+        staged = self.root / "localhub_media"
+        staged.mkdir(exist_ok=True)
+        file = staged / "art.png"
+        Image.new("RGB", (7, 9), "green").save(file)
+        original = file.read_bytes()
+        ref, _ = register_reference(self.store, self.root, project, "Label", file.name)
+        info = dict(width=320, height=180, fps=24, frames=12, has_audio=False)
+        with patch("localhub_delivery.inspect_media", return_value=("file", "video", info)):
+            a, b = [master_review(self.store, project, spec, "read")["binding"] for spec in specs]
+            master_review(self.store, project, dict(specs[0], binding=a, annotation=note), "save")
+            link = dict(source_binding=a, annotation=note, reference=ref, approved_by="Test reviewer",
+                        approval_record="Test proof 3", expected_version=0)
+            def attach(**changes):
+                return link_artwork(self.store, self.root, project, dict(link, **changes))
+            with self.assertRaises(LookupError):
+                attach(annotation=dict(note, region=[0, 0, 1, 1]))
+            with self.assertRaises(ValueError):
+                attach(approved_by="")
+            self.assertEqual(attach(), attach())
+            submit = dict(source_binding=a, annotation=note, target_binding=b, target_frame=3,
+                          expected_version=0, comment="Adjusted label", state="submitted")
+            with self.assertRaises(RequestConflict):
+                record_followup(self.store, project, submit)
+            record_followup(self.store, project, dict(submit, artwork_version=1))
+            Image.new("RGB", (7, 9), "red").save(file)
+            second, _ = register_reference(self.store, self.root, project, "Label", file.name)
+            db = ProjectDatabase(self.store.path)
+            history = list_master_reviews(db, project)["reviews"][0]["artwork_history"]
+            self.assertEqual([item["reference"]["revision"] for item in history], [1])
+            image = read_reference_image(db, self.root, project, history[0]["reference"])
+            self.assertEqual(base64.b64decode(image["data"]), original)
+            with self.assertRaises(ValueError):
+                read_reference_image(db, self.root, "other", ref)
+            with self.assertRaises(ValueError):
+                attach(reference=dict(second, sha256=ref["sha256"]), expected_version=1)
+            with self.assertRaises(RequestConflict):
+                attach(reference=second)
+            attach(reference=second, expected_version=1)
+            verdict = dict(submit, expected_version=1, state="accepted", reviewer="Test reviewer")
+            for version in (1, 2):
+                with self.assertRaises(RequestConflict):
+                    record_followup(self.store, project, dict(verdict, artwork_version=version))
+            record_followup(self.store, project, dict(submit, expected_version=1, artwork_version=2))
+            record_followup(self.store, project, dict(verdict, expected_version=2, artwork_version=2))
+            review = list_master_reviews(db, project)["reviews"][0]
+            self.assertEqual([x["reference"]["revision"] for x in review["artwork_history"]], [1, 2])
+            self.assertEqual([x["artwork_version"] for x in review["followups"]], [1, 2, 2])
 
     async def test_relocate_delivery_and_detect_changed_media(self):
         row = await self.accept()

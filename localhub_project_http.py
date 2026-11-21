@@ -16,11 +16,11 @@ from localhub_audio_qc import REPORT_VERSION, inspect_audio, inspect_cut_audio
 from localhub_compare import compare_takes
 from localhub_copy import list_copy, update_copy
 from localhub_delivery import describe_video_sources, verify_master
-from localhub_master_review import list_master_reviews, master_review, record_followup
+from localhub_master_review import link_artwork, list_master_reviews, master_review, record_followup
 from localhub_jobs import Jobs
 from localhub_media import file_stamp, inspect_media, probe_media
 from localhub_project_plan import plan_cut, read_project_plan, save_project_plan
-from localhub_references import list_references, register_reference, register_reference_file
+from localhub_references import list_references, read_reference_image, register_reference, register_reference_file
 from localhub_storage import RequestConflict
 from localhub_subtitles import read_subtitles, save_subtitles, subtitle_srt
 from localhub_timeline import (
@@ -126,6 +126,15 @@ async def r_references(request):
     except (ValueError, OSError) as exc:
         return _err(400, str(exc))
     return web.json_response({"ok": True, "reference": row}, status=201 if created else 200)
+
+
+async def reference_image(request):
+    try:
+        ctx = _context(request)
+        project = _label(request.query.get("project"), "project")
+        return _ok(await asyncio.to_thread(read_reference_image, ctx.jobs(), ctx.input_directory(), project, await _body(request)))
+    except (ValueError, OSError) as exc:
+        return _err(400, str(exc))
 
 
 async def upload_reference(request):
@@ -404,6 +413,10 @@ async def e_master_review(request):
         if request.method == "GET":
             return _ok(list_master_reviews(_context(request).jobs(), project))
         action = request.match_info["action"]
+        if action == "artwork":
+            ctx = _context(request)
+            record = await asyncio.to_thread(link_artwork, ctx.jobs(), ctx.input_directory(), project, await _body(request))
+            return _ok({"artwork": record})
         if action == "followup":
             event = await asyncio.to_thread(record_followup, _context(request).jobs(), project, await _body(request))
             return _ok({"event": event})
@@ -506,6 +519,7 @@ def register_project_routes(app, table, *, jobs, input_directory, generation_ena
     table.post("/localhub/v2/media")(j_register_media)
     table.get("/localhub/v2/references")(r_references)
     table.post("/localhub/v2/references")(r_references)
+    table.post("/localhub/v2/references/read")(reference_image)
     table.post("/localhub/v2/references/upload")(upload_reference)
     table.get("/localhub/v2/jobs")(j_list)
     table.get("/localhub/v2/jobs/{job_id}")(j_get)
@@ -526,7 +540,7 @@ def register_project_routes(app, table, *, jobs, input_directory, generation_ena
     table.get("/localhub/v2/deliveries/subtitles.srt")(e_subtitles)
     table.post("/localhub/v2/deliveries/master-check")(e_master_check)
     table.get("/localhub/v2/deliveries/master-review")(e_master_review)
-    table.post("/localhub/v2/deliveries/master-review/{action:read|frame|save|followup}")(e_master_review)
+    table.post("/localhub/v2/deliveries/master-review/{action:read|frame|save|followup|artwork}")(e_master_review)
     table.get("/localhub/v2/ad-copy")(e_copy)
     table.post("/localhub/v2/ad-copy")(e_copy)
     table.put("/localhub/v2/ad-copy")(e_copy)
