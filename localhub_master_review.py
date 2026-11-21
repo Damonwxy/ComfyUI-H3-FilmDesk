@@ -5,7 +5,7 @@ import json
 
 import ffmpeg_tools
 from localhub_delivery import verify_master
-from localhub_media import file_stamp, media_sha256, video_frame_png
+from localhub_media import crop_frame_png, file_stamp, media_sha256, normalized_region, video_frame_png
 from localhub_storage import RequestConflict
 from localhub_timeline import list_deliveries, require_delivery
 
@@ -73,7 +73,12 @@ def master_review(jobs, project, spec, action):
         frame = spec.get("frame")
         if type(frame) is not int or not 0 <= frame < info["frames"]:
             raise ValueError("帧号超出成片范围")
-        raw = video_frame_png(path, frame, ffmpeg_tools.locate_ffmpeg())
+        region = normalized_region(spec["region"]) if "region" in spec else None
+        ffmpeg = ffmpeg_tools.locate_ffmpeg()
+        raw = video_frame_png(path, frame, ffmpeg)
+        if region is not None:
+            raw, bounds, size = crop_frame_png(raw, region, ffmpeg)
+            result.update(region=region, pixel_bounds=bounds, frame_size=size)
         result.update(frame=frame, png=base64.b64encode(raw).decode("ascii"))
     if file_stamp(path) != stamp:
         raise RequestConflict("核对时母版文件已变动，请重新打开")

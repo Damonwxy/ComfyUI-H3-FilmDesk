@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import types
@@ -354,6 +355,8 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         with patch("localhub_delivery.inspect_media", return_value=(str(self.file), "video", info)):
             binding = master_review(self.store, "fixture", spec, "read")["binding"]
             payload = dict(spec, binding=binding, annotation=annotation)
+            with self.assertRaisesRegex(ValueError, "区域须"):
+                master_review(self.store, "fixture", dict(payload, frame=9, region=[0, 0, 0, 1]), "frame")
             for _ in range(2):
                 self.assertEqual(master_review(self.store, "fixture", payload, "save")["notes"], [annotation])
             with self.assertRaises(ValueError):
@@ -370,6 +373,25 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         history = list_master_reviews(reopened, "fixture")["reviews"]
         self.assertEqual([(r["binding"], r["notes"]) for r in history], [(binding, [annotation])])
         self.assertEqual(list_master_reviews(reopened, "other")["reviews"], [])
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "FFmpeg is required")
+    def test_master_region_preserves_odd_bounds_and_16_bit_colour(self):
+        from localhub_media import crop_frame_png, normalized_region
+
+        def convert(data, args):
+            return subprocess.run(["ffmpeg", "-v", "error", "-nostdin", *args], input=data,
+                                  capture_output=True, check=True).stdout
+        # Distinct low bytes make accidental conversion to 8 bits observable.
+        raw = b"".join(struct.pack(">HHH", i*31, i*57+1, i*113+9) for i in range(11*9))
+        png = convert(raw, ["-f", "rawvideo", "-pix_fmt", "rgb48be", "-s", "11x9", "-i", "-",
+                            "-frames:v", "1", "-c:v", "png", "-f", "image2pipe", "-"])
+        for region, box in [([.1,.2,.6,.8], [1,1,7,8]), ([.99,.99,1,1], [10,8,11,9]),
+                            ([0,0,1,1], [0,0,11,9])]:
+            cropped, bounds, size = crop_frame_png(png, normalized_region(region), "ffmpeg")
+            self.assertEqual((bounds, size, cropped[24]), (box, [11,9], 16))
+            pixels = convert(cropped, ["-f", "image2pipe", "-i", "-", "-f", "rawvideo", "-pix_fmt", "rgb48be", "-"])
+            x, y, r, b = box
+            self.assertEqual(pixels, b"".join(raw[(j*11+x)*6:(j*11+r)*6] for j in range(y,b)))
 
     def test_followup_keeps_exact_note_target_and_verdict_history(self):
         project = "review"

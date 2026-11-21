@@ -2,7 +2,9 @@
 
 import hashlib
 import json
+import math
 import os
+import struct
 import subprocess
 from fractions import Fraction
 from pathlib import Path
@@ -12,6 +14,32 @@ from tempfile import NamedTemporaryFile
 def file_stamp(path):
     stat = Path(path).stat()
     return [stat.st_size, stat.st_mtime_ns]
+
+
+def normalized_region(region):
+    if (not isinstance(region, list) or len(region) != 4
+            or not all(type(v) in (int, float) and 0 <= v <= 1 for v in region)
+            or region[0] >= region[2] or region[1] >= region[3]):
+        raise ValueError("区域须为源画面内的左、上、右、下四个归一化坐标")
+    return [float(v) for v in region]
+
+
+def crop_frame_png(raw, region, ffmpeg):
+    # Crop the displayed PNG after rotation and full-frame colour conversion. In
+    # particular, an odd-edged box must not shift chroma or quantize 16-bit RGB.
+    width, height = struct.unpack_from(">II", raw, 16)
+    left, top, right, bottom = (Fraction(str(v)) for v in region)
+    x, y = math.floor(left * width), math.floor(top * height)
+    end_x, end_y = math.ceil(right * width), math.ceil(bottom * height)
+    try:
+        result = subprocess.run([
+            ffmpeg, "-v", "error", "-nostdin", "-f", "image2pipe", "-c:v", "png", "-i", "pipe:0",
+            "-vf", f"crop={end_x-x}:{end_y-y}:{x}:{y}:exact=1", "-frames:v", "1",
+            "-c:v", "png", "-f", "image2pipe", "pipe:1",
+        ], input=raw, capture_output=True, timeout=120, check=True)
+    except subprocess.SubprocessError as exc:
+        raise ValueError("无法从母版画面提取该选区") from exc
+    return result.stdout, [x, y, end_x, end_y], [width, height]
 
 
 def media_sha256(path):
