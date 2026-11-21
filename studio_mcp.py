@@ -1,0 +1,149 @@
+"""Optional Codex MCP entry point for the local studio."""
+
+import json
+import os
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode, urlsplit
+from urllib.request import ProxyHandler, Request, build_opener
+from uuid import UUID
+
+from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
+from pydantic import BaseModel
+
+from localhub_project_plan import plan_cut, read_project_plan, save_project_plan
+from localhub_storage import ProjectDatabase
+
+
+mcp = FastMCP("Local Hub Studio")
+base = os.environ.get("LOCALHUB_URL", "http://127.0.0.1:8188").rstrip("/")
+database = os.environ.get("LOCALHUB_DATABASE")
+url = urlsplit(base)
+if (url.scheme != "http" or url.hostname not in ("127.0.0.1", "::1", "localhost")
+        or url.username is not None or url.path or url.query or url.fragment):
+    raise ValueError("LOCALHUB_URL must be an HTTP loopback origin")
+
+http = build_opener(ProxyHandler({}))
+
+
+class CutRevision(BaseModel):
+    project: str
+    revision: int
+
+
+class ProjectBoard(CutRevision):
+    studio: str
+    timeline: dict
+    jobs: list[dict]
+
+
+def bridge(path, project, value=None, *, method="PUT", headers=None, timeout=10, **query):
+    target = f"{base}/localhub/v2/{path}?{urlencode({'project': project, **query})}"
+    req = Request(target)
+    if value is not None:
+        req = Request(target, data=json.dumps(value, ensure_ascii=False).encode("utf-8"),
+                      method=method, headers={"Content-Type": "application/json", **(headers or {})})
+    try:
+        with http.open(req, timeout=timeout) as response:
+            return json.load(response)
+    except HTTPError as exc:
+        error = f"Bridge returned HTTP {exc.code}"
+        if exc.headers.get_content_type() == "application/json":
+            error = json.load(exc).get("error") or error
+        raise ValueError(error) from exc
+    except (URLError, TimeoutError) as exc:
+        raise ValueError("本机生成服务未响应。若刚提交过，请使用原请求键重试") from exc
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, untrustedContentHint=True))
+def localhub_find_projects(query: str = "") -> dict:
+    """Find existing projects by name, title, genre or brief. Empty query lists the library.
+
+    When several projects fit the user's request, present distinguishing details and ask which
+    one to use before changing anything. A search does not select or create a project.
+    """
+    if database:
+        from localhub_projects import find_projects
+        return find_projects(ProjectDatabase(database), query)
+    return bridge("projects", "", q=query)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def localhub_read_project(project: str = "本地项目") -> ProjectBoard:
+    """Read shot candidates and the saved cut revision for one project in Local Hub Studio."""
+    jobs = bridge("jobs", project)["jobs"]
+    edit = bridge("timeline", project)
+    return ProjectBoard(**{
+        "project": project,
+        "studio": f"{base}/localhub/studio?{urlencode({'project': project})}",
+        "revision": edit["revision"],
+        "timeline": edit["timeline"],
+        "jobs": [{
+            **{key: job.get(key) for key in ("id", "shot", "kind", "source", "state", "delivery", "outputs")},
+            "frames": job["info"].get("frames"),
+            "fps": job["info"].get("fps"),
+        } for job in jobs],
+    })
+
+
+@mcp.tool(annotations=ToolAnnotations(destructiveHint=False))
+def localhub_save_cut(project: str, expected_revision: int, timeline: dict) -> CutRevision:
+    """Save a new cut revision. Use the revision and track/clip structure from localhub_read_project."""
+    edit = bridge("timeline", project, {"expected_revision": expected_revision, "timeline": timeline})
+    return CutRevision(project=project, revision=edit["revision"])
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def localhub_read_plan(project: str, revision: int | None = None) -> dict:
+    """Read a film, ad or series plan and its exact script, scenes, shot references and selections."""
+    if database:
+        return read_project_plan(ProjectDatabase(database), project, revision)
+    return bridge("plan", project, **({"revision": revision} if revision is not None else {}))
+
+
+@mcp.tool(annotations=ToolAnnotations(destructiveHint=False, idempotentHint=True))
+def localhub_save_plan(project: str, expected_revision: int, plan: dict) -> dict:
+    """Save a new plan revision. Read the plan first; a concurrent update prevents a stale save."""
+    if database:
+        return save_project_plan(ProjectDatabase(database, writable=True), project, expected_revision, plan)
+    return bridge("plan", project, {"expected_revision": expected_revision, "plan": plan})
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def localhub_draft_plan_cut(project: str, revision: int, episode: str | None = None) -> dict:
+    """Assemble an unsaved cut from one saved plan. An episode ID limits the draft to one episode."""
+    if database:
+        return plan_cut(ProjectDatabase(database), project, revision, episode)
+    query = {"revision": revision}
+    if episode is not None:
+        query["episode"] = episode
+    return bridge("plan/cut", project, **query)
+
+
+@mcp.tool(annotations=ToolAnnotations(destructiveHint=False))
+def localhub_preflight_shot(project: str, revision: int, shot_id: str, params: dict | None = None) -> dict:
+    """Prepare a saved script shot with H3. Optional params include size, a decimal seed and extra references.
+
+    Review info before submitting. Keep the returned submission, including its request key.
+    """
+    return bridge("video/preflight", project, {"project": project, "plan_shot": {"revision": revision, "shot_id": shot_id},
+                                               "params": params or {}}, method="POST", timeout=60)
+
+
+@mcp.tool(annotations=ToolAnnotations(destructiveHint=False, idempotentHint=True))
+def localhub_submit_shot(project: str, submission: dict) -> dict:
+    """Queue the reviewed submission from localhub_preflight_shot. Retry with the same body and key."""
+    body, key = submission.get("body"), submission.get("key")
+    if not isinstance(body, dict) or body.get("project") != project or not body.get("plan_shot") or not isinstance(key, str):
+        raise ValueError("请使用当前项目的镜头预检回执")
+    return bridge("jobs", project, body, method="POST", headers={"Idempotency-Key": key}, timeout=60)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, untrustedContentHint=True))
+def localhub_read_job(project: str, job_id: str) -> dict:
+    """Recover the native status and media of one job in the given project."""
+    return bridge("jobs/" + str(UUID(job_id)), project)
+
+
+if __name__ == "__main__":
+    mcp.run(transport="stdio")

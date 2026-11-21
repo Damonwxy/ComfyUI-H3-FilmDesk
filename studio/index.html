@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Local Hub 制作台</title>
+  <link rel="stylesheet" href="/localhub/studio/studio.css">
+  <script src="/localhub/studio/studio.js" type="module"></script>
+</head>
+<body>
+  <header class="topbar">
+    <h1>Local Hub <span>制作台</span></h1>
+    <form id="project-form" class="inline">
+      <label for="project">项目</label>
+      <input id="project" type="text" maxlength="120" required>
+      <button>打开</button>
+    </form>
+    <span id="review-mode" class="quiet" hidden>离线制作</span>
+    <details id="connections" class="quiet" hidden>
+      <summary>连接详情</summary>
+      <p id="site-tools" role="status"></p>
+    </details>
+  </header>
+  <main>
+    <div id="notice" class="notice" aria-live="polite" hidden></div>
+    <details id="project-plan" class="panel plan-panel">
+      <summary>项目编排 <span id="plan-summary" class="quiet"></span></summary>
+      <div class="plan-shell">
+        <div class="inline wrap plan-toolbar">
+          <label>编排版号 <select id="plan-version" disabled></select></label>
+          <button id="reload-plan" type="button">重读编排</button>
+          <button id="save-plan" type="submit" form="plan-editor" class="primary" disabled>保存编排</button>
+          <p id="plan-feedback" role="status"></p>
+        </div>
+        <form id="plan-editor" hidden>
+          <details id="plan-brief" class="plan-brief">
+            <summary>创作简报与剧本</summary>
+            <div id="plan-metadata"></div>
+          </details>
+          <div class="plan-layout">
+            <nav id="plan-navigation" aria-label="分集与场次"></nav>
+            <section id="plan-work" aria-label="场次与镜头"></section>
+          </div>
+        </form>
+      </div>
+    </details>
+    <div class="review">
+      <aside class="panel" aria-labelledby="shots-title">
+        <div class="panel-head">
+          <h2 id="shots-title">镜头候选</h2>
+          <button id="refresh" type="button">刷新</button>
+        </div>
+        <div id="shots" class="shots">正在读取任务</div>
+      </aside>
+
+      <section class="panel" aria-labelledby="preview-title">
+        <div class="panel-head">
+          <h2 id="preview-title" tabindex="-1">候选预览</h2>
+          <span id="job-state" class="quiet"></span>
+        </div>
+        <div id="monitor" class="monitor"><p>选择一个已完成的候选来预览</p></div>
+        <div id="compare-bar" class="compare-bar" hidden>
+          <label>同步对照 B <select id="compare-choice"></select></label>
+          <button type="button" id="compare-play" hidden>同步播放</button>
+          <span id="compare-status" class="quiet" role="status"></span>
+        </div>
+        <div id="compare-cut" class="compare-bar" hidden>
+          <label>剪辑中的画面片段 <select id="compare-segment"></select></label>
+          <button type="button" id="choose-a">采用 A</button>
+          <button type="button" id="choose-b">采用 B</button>
+          <span id="compare-decision" class="quiet" role="status"></span>
+        </div>
+        <div class="candidate-details">
+          <p id="job-details" class="quiet"></p>
+          <div id="frame-review"></div>
+          <div id="outputs" class="outputs"></div>
+          <div class="inline wrap">
+            <button id="append-picture" type="button" hidden>加入画面轨</button>
+            <button id="append-audio" type="button" hidden>加入声音轨</button>
+            <button id="check-audio" type="button" hidden>检查音频</button>
+            <button id="cancel" type="button" hidden>取消此任务</button>
+          </div>
+          <div id="audio-result" class="quality-report" aria-live="polite"></div>
+        </div>
+      </section>
+    </div>
+
+    <section class="panel cut" aria-labelledby="cut-title">
+      <div class="panel-head">
+        <div>
+          <h2 id="cut-title">剪辑清单</h2>
+          <p id="revision" class="quiet">读取版本中</p>
+        </div>
+        <div class="inline wrap">
+          <button id="save" type="button" class="primary" disabled>保存清单</button>
+          <label id="export-revision-label" class="inline" hidden>导出版号
+            <input id="export-revision" type="number" min="1" step="1" placeholder="当前">
+          </label>
+          <button id="export" type="button" disabled>导出 OTIO</button>
+          <label for="otio" class="file-action">回导 OTIO</label>
+          <input id="otio" type="file" accept=".otio,application/json" class="file-input">
+        </div>
+      </div>
+      <section id="return-review" class="tracks" aria-labelledby="return-title" hidden>
+        <h3 id="return-title">核对回传剪辑</h3>
+        <p id="return-file"></p>
+        <div class="inline wrap">
+          <label>上次交出的剪版 <input id="return-base" type="number" step="1" min="1"></label>
+          <button id="return-check" type="button">对照回传</button>
+          <button id="return-close" type="button">关闭核对</button>
+        </div>
+        <details>
+          <summary>用交付清单核对素材</summary>
+          <label>交付包中的 manifest.json（可选） <input id="return-manifest" type="file" accept=".json"></label>
+        </details>
+        <p id="return-status" role="status"></p>
+        <div id="return-changes"></div>
+        <button id="return-selected" type="button" hidden>将勾选改动加入草稿</button>
+        <button id="return-apply" type="button" hidden>将整份回传载入草稿</button>
+      </section>
+      <div id="tracks" class="tracks"></div>
+    </section>
+
+    <details id="copy-panel" class="panel generate">
+      <summary>广告文案审核</summary>
+      <div class="copy-work">
+        <div class="inline wrap"><label>文案条目 <select id="copy-choice"></select></label>
+          <button id="copy-refresh" type="button">重读文案</button></div>
+        <div id="copy-record"></div>
+        <form id="copy-edit">
+          <label>文案名称<input name="name" maxlength="120" required></label>
+          <label>广告文案<textarea name="wording" rows="2" maxlength="2000" required></textarea></label>
+          <label>适用范围<input name="scope" maxlength="300" placeholder="产品型号、市场和语言" required></label>
+          <label>资料与依据<textarea name="evidence" rows="2" maxlength="2000" placeholder="资料名称、版本或页码，以及它支持的事实" required></textarea></label>
+          <div><button type="submit">保存待审版本</button></div>
+        </form>
+        <form id="copy-review" hidden>
+          <label>审核人<input name="reviewer" maxlength="120" required></label>
+          <label>审核说明<input name="reason" maxlength="1200" required></label>
+          <div class="inline wrap"><button value="approved">通过此版</button><button value="returned">退回此版</button></div>
+        </form>
+        <details id="copy-history" hidden><summary>历史版本</summary><div></div></details>
+        <p id="copy-status" role="status"></p>
+      </div>
+    </details>
+
+    <section class="panel deliveries" aria-labelledby="delivery-title">
+      <div class="panel-head">
+        <h2 id="delivery-title">广告交付版本</h2>
+      </div>
+      <div id="delivery-list"></div>
+      <section id="delivery-review" aria-labelledby="delivery-review-title" hidden>
+        <div class="panel-head inline wrap">
+          <div>
+            <h3 id="delivery-review-title" tabindex="-1"></h3>
+            <p class="quiet" id="delivery-review-target"></p>
+          </div>
+          <button id="close-delivery-review" type="button">收起核对</button>
+        </div>
+        <form id="delivery-subtitles">
+          <div class="inline wrap review-heading">
+            <h4>字幕</h4>
+            <div class="inline wrap"><label>字幕版本 <select id="subtitle-version" disabled></select></label>
+              <button id="refresh-subtitles" type="button">重读字幕</button></div>
+          </div>
+          <p class="quiet" id="subtitle-timing"></p>
+          <div id="subtitle-cues"></div>
+          <div class="inline wrap">
+            <button id="add-subtitle" type="button" disabled>添加字幕</button>
+            <button id="save-subtitles" type="submit" disabled>保存字幕</button>
+            <a id="download-subtitles" class="file-action" hidden>下载 SRT</a>
+          </div>
+          <p id="subtitle-status" role="status"></p>
+        </form>
+        <form id="delivery-master">
+          <h4>母版核对</h4>
+          <div class="master-fields">
+            <label class="master-source">母版候选<select name="master" required></select></label>
+            <label class="master-source">技术要求<select name="profile">
+              <option value="cut">画幅、帧率和时长</option>
+              <option value="size">指定像素尺寸</option>
+              <option value="avc">指定尺寸 · H.264 / AAC 48 kHz 双声道</option>
+            </select></label>
+            <div id="master-dimensions" class="inline wrap" hidden>
+              <label>宽度<input name="width" type="number" min="1" step="1" disabled></label>
+              <label>高度<input name="height" type="number" min="1" step="1" disabled></label>
+            </div>
+          </div>
+          <button id="check-master" type="submit">核对母版</button>
+          <p id="master-status" role="status"></p>
+          <div id="handoff-options" hidden>
+            <section id="video-source-review" aria-labelledby="video-source-title" hidden>
+              <h4 id="video-source-title">源片分辨率与放大</h4>
+              <p class="quiet">按母版实际使用的放大方式登记。</p>
+              <div id="video-finishing"></div>
+            </section>
+            <label class="inline"><input id="pack-subtitles" type="checkbox" disabled><span id="pack-subtitle-label">附上所选字幕</span></label>
+            <label>素材署名与许可，每行一条<textarea name="credits" rows="2" maxlength="4000"></textarea></label>
+            <button id="download-handoff" type="button">下载打包配置</button>
+          </div>
+        </form>
+      </section>
+      <details id="new-delivery" class="generate">
+        <summary>登记交付规格</summary>
+        <form id="register-delivery">
+          <div class="delivery-fields">
+            <label>交付用途<input name="name" type="text" maxlength="120" placeholder="例如：新品短版" required></label>
+            <label>市场<input name="market" type="text" maxlength="120" placeholder="例如：巴西" required></label>
+            <label>语言<input name="language" type="text" maxlength="120" placeholder="例如：葡萄牙语" required></label>
+            <label>目标画幅<select name="aspect" required>
+              <option value="">请选择</option><option>16:9</option><option>9:16</option>
+              <option>1:1</option><option>4:5</option><option>4:3</option><option>2.39:1</option>
+            </select></label>
+            <label>已存剪辑版号<input name="revision" type="number" min="1" step="1" required></label>
+          </div>
+          <p class="quiet">目标画幅是交付要求，成片尺寸需在导出视频后核对。</p>
+          <div><button id="pin-delivery" type="submit" disabled>登记此版本</button></div>
+        </form>
+      </details>
+      <p id="delivery-status" role="status"></p>
+    </section>
+
+    <details class="panel generate">
+      <summary>登记本机素材</summary>
+      <form id="register-media">
+        <p class="quiet">将 MP4、MOV 或 WAV 放入输入目录的 localhub_media，再输入相对文件名。登记后可以预览并加入剪辑。</p>
+        <label>镜头名称<input name="shot" maxlength="120" required></label>
+        <label>文件名<input name="file" maxlength="512" placeholder="例如：场景一/实拍.mp4" required></label>
+        <div><button class="primary" type="submit">登记素材</button></div>
+      </form>
+    </details>
+
+    <details id="legacy-canvas" class="panel generate" hidden>
+      <summary>旧画布素材 <span id="legacy-status" class="quiet"></span></summary>
+      <div id="legacy-archives"></div>
+    </details>
+
+    <details class="panel generate">
+      <summary>登记参考图版本</summary>
+      <form id="register-reference">
+        <p class="quiet">将 PNG、JPEG 或 WebP 放入输入目录的 localhub_media。用同一个名称登记新内容时生成新版本。</p>
+        <label>参考图名称<input name="asset_id" maxlength="120" required></label>
+        <label>图片文件名<input name="file" maxlength="512" placeholder="例如：商品/主图.png" required></label>
+        <div><button class="primary" type="submit">登记参考图</button></div>
+      </form>
+    </details>
+
+    <details id="generation-panel" class="panel generate" hidden>
+      <summary>新建 H3 候选</summary>
+      <form id="generate">
+        <div id="planned-generation" class="inline wrap" hidden>
+          <span id="planned-generation-label"></span>
+          <button id="clear-planned-generation" type="button">改为独立候选</button>
+        </div>
+        <div class="input-row">
+          <label>镜头名称<input name="shot" maxlength="120" required></label>
+          <label>时长（秒）<input name="duration_s" type="number" min="0.25" max="15" step="0.25" value="5" required></label>
+          <label>宽度<input name="width" type="number" min="32" step="32" value="864" required></label>
+          <label>高度<input name="height" type="number" min="32" step="32" value="480" required></label>
+        </div>
+        <div class="input-row refs">
+          <label>画幅预设<select id="aspect"><option value="">自定义</option>
+            <option value="512x288">横屏 16:9</option>
+            <option value="288x512">竖屏 9:16</option>
+          </select></label>
+          <label>已登记参考图<select id="registered-reference" name="registered_reference">
+            <option value="">请选择参考图及版本</option>
+          </select></label>
+          <label>参考图用途<select id="reference-role" name="reference_role" disabled>
+            <option value="reference">多模态参考</option>
+            <option value="first">锁定为首帧</option>
+          </select></label>
+        </div>
+        <label>提示词<textarea name="prompt" rows="3" required aria-describedby="preflight-result"></textarea></label>
+        <fieldset id="free-references" class="input-row refs" aria-label="附加多模态参考">
+          <label>参考图本机路径<textarea name="ref_images" rows="2" placeholder="每行一张"></textarea></label>
+          <label>参考视频本机路径<textarea name="ref_videos" rows="2" placeholder="每行一段"></textarea></label>
+          <label>参考音频本机路径<textarea name="ref_audios" rows="2" placeholder="每行一段"></textarea></label>
+        </fieldset>
+        <div class="input-row">
+          <label>取用起帧（可选）<input name="take_start" type="number" min="0" step="1" placeholder="0"></label>
+          <label>取用出帧（不含，可选）<input name="take_end" type="number" min="1" step="1" placeholder="留空用到末帧"></label>
+        </div>
+        <div class="inline wrap">
+          <label class="inline"><input id="video-audio" type="checkbox" name="video_audio">同时引用视频原声</label>
+          <button id="preflight" type="submit">镜头预检</button>
+          <button id="confirm-generate" class="primary" type="button" disabled>确认并提交</button>
+        </div>
+        <div id="preflight-result" class="quality-report" aria-live="polite"></div>
+      </form>
+    </details>
+  </main>
+</body>
+</html>

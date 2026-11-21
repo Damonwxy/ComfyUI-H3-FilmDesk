@@ -1,0 +1,98 @@
+{
+  "$comment": "Local Hub Bridge — 官方 MiniMax skills 的 hub_* 工具 → 本地 ComfyUI 路由映射。供 AI 助手/未来 MCP 包装器读取。",
+  "base_url": "http://127.0.0.1:8188",
+  "tools": [
+    {
+      "hub_name": "hub_generate_video",
+      "local": {"method": "POST", "path": "/localhub/hub/generate_video"},
+      "params": {
+        "mode": "t2v | i2v | fl2v | r2v，默认 t2v。r2v 探测到 ref2va 主模型和对应 LoRA 时会选用",
+        "prompt": "string (官方 h3-prompt-writing 结构化提示词; r2v 按响应 references 中的 <Picture i> / <Video i> / <Audio i> 引用)",
+        "music_direction": "string? (配乐方向, 并入提示词由 H3 原生音频直出)",
+        "duration_s": "number? 默认 5。按 24 fps 换算，帧数向上对齐到 17k+5，5 秒请求对应 124 帧",
+        "width": "int? 默认 864", "height": "int? 默认 480。宽高按 32 对齐，大画布按 768×1344 的面积目标缩放",
+        "first_frame": "path? (i2v/fl2v 必填)", "last_frame": "path? (fl2v 必填)",
+        "ref_images": "path[]? r2v 可选，最多 9 张",
+        "ref_videos": "path[] 或 {path,include_audio}[]，r2v 可选，最多 3 段。转为 24fps，按项选择原声",
+        "ref_audios": "path[]? r2v 可选，最多 3 段独立音频。r2v 需要至少一种参考",
+        "ref_image_size": "match | max，默认 match。max 允许更大的参考图",
+        "control_video": "path? 已预处理的 Canny、Depth、HED、MLSD 或 Pose 控制视频，需 Fun ControlNet-Union 模型",
+        "control_strength": "float? 默认1.0 (控制漂移时可调>1)", "control_start": "float? 默认0.0", "control_end": "float? 默认1.0",
+        "low_vram": "bool | \"auto\"，默认 auto。对齐后的画布面积超过 864×480 或帧数超过 124 时，若所需的两个 KJNodes 节点均可用则启用分块",
+        "chunks": "int? 默认8 (6G/16G 档; 显存越大可越小)", "head_chunks": "int? 默认12",
+        "steps": "int? 默认8 (turbo LoRA 档)", "cfg": "float? 默认1.0",
+        "attention_backend": "string? 图内默认 comfy kitchen attention，ModelAttentionBackend 节点可用时插入",
+        "seed": "int?", "timeout_s": "int? 等待秒数，默认 1800，最多按 3600 计算"
+      },
+      "returns": {"ok": true, "info": {}, "files": ["绝对路径"], "assets": ["画布资产"]},
+      "notes": "桥接工作流见 h3_graph.py。视频和音频从同一份 H3 采样结果分别解码后合成。有 control_video 时，在采样前接入 Fun ControlNet"
+    },
+    {
+      "hub_name": "hub_generate_image",
+      "local": {"method": "POST", "path": "/localhub/hub/generate_image"},
+      "params": {"prompt": "string", "negative": "string?", "checkpoint": "string? ComfyUI 的 checkpoint 文件名", "width": "int? 默认 1024", "height": "int? 默认 1024", "seed": "int?"},
+      "notes": "从 ComfyUI 的 checkpoints 列表选择 SD 系模型，该列表包含 extra_model_paths.yaml 配置的目录。列表为空且未指定模型时返回 501"
+    },
+    {
+      "hub_name": "hub_video_edit",
+      "local": {"method": "POST", "path": "/localhub/hub/video_edit"},
+      "params": {
+        "op": "concat | cut | replace_audio | mute",
+        "inputs": ["视频绝对路径"],
+        "trim": {"start": "秒?", "end": "秒?"} ,
+        "audio": "path? (replace_audio 用)",
+        "reencode": "bool?"
+      },
+      "notes": "通过 LOCALHUB_FFMPEG 或 PATH 查找 FFmpeg；concat 编码参数不一致时自动回退重编码"
+    },
+    {
+      "hub_name": "hub_analyse_media",
+      "local": {"method": "POST", "path": "/localhub/hub/analyse_media"},
+      "params": {"path": "媒体绝对路径"},
+      "notes": "ffprobe 元数据级分析(时长/分辨率/帧率/编码/码率); 语义级理解本地无 VLM, 为降级实现"
+    },
+    {
+      "hub_name": "hub_canvas_get_node",
+      "local": {"method": "GET", "path": "/localhub/canvas/assets?type=video&limit=50"},
+      "notes": "本地画布 = user/localhub/canvas.json 资产清单; 生成的视频/图片自动登记"
+    },
+    {
+      "hub_name": "hub_canvas_group_recent_outputs",
+      "local": {"method": "POST", "path": "/localhub/canvas/group_recent"},
+      "params": {"n": "int? 默认5", "name": "string?"},
+      "notes": "把最近 n 个资产编组(对应 skill 的来源清单/编组交付步骤)"
+    },
+    {
+      "hub_name": "hub_generate_music",
+      "local": {"method": "POST", "path": "/localhub/hub/generate_music"},
+      "params": {
+        "caption": "string 必填 — 三段式: Global Metadata / Vocal Details / Arrangement",
+        "lyrics": "string? — 支持 [intro] [verse] [chorus] [bridge] [outro] 结构标签",
+        "duration_s": "number? 默认120 (最长约300)",
+        "steps": "int? 默认30", "cfg": "float? 默认1.7", "seed": "int?"
+      },
+      "requires_models": {
+        "minimax_music3_dit_int8_convrot.safetensors": "models/diffusion_models (~2.5GB)",
+        "minimax_music3_text_encoder_pruned_int8_convrot.safetensors": "models/text_encoders (~9.2GB)",
+        "minimax_music3_dav.safetensors": "models/vae (~207MB)"
+      },
+      "source": "https://huggingface.co/Comfy-Org/MiniMax-Music-3",
+      "notes": "模型缺失时返回501+下载清单。低显存建议用 int8 DiT + tiled audio decode(默认)"
+    },
+    {
+      "hub_name": "hub_synthesize_speech",
+      "local": {"method": "POST", "path": "/localhub/hub/synthesize_speech"},
+      "notes": "独立语音合成未实现，返回 501。视频中的对白可写进 H3 提示词"
+    },
+    {
+      "hub_name": "hub_image_search",
+      "local": {"agent_native": "WebSearch/WebFetch"},
+      "notes": "素材搜索由 AI 助手原生能力承担, 无需本地实现"
+    },
+    {
+      "hub_name": "webfetch / task",
+      "local": {"agent_native": true},
+      "notes": "网页抓取与子任务派发由 AI 助手原生能力承担"
+    }
+  ]
+}
