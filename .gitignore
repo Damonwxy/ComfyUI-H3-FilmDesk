@@ -1,0 +1,7 @@
+*
+!/.gitignore
+!/README.md
+!/studio/
+!/studio/compare-cut.mjs
+!/tests/
+!/tests/compare_cut.test.mjs
