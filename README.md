@@ -47,6 +47,8 @@ py -3.12 -m venv .venv
 
 换到新的 Codex 会话后，可用 `localhub_list_master_reviews` 找回意见。有多个交付或母版符合描述时，先请创作者选择。用 `localhub_read_master_review` 取得所选母版的回执，`localhub_read_master_frame` 可把指定帧以 PNG 图像带进对话，`localhub_save_master_note` 保存整帧或选区意见。读取历史意见可直连本机项目库，取图和新增意见需要本机制作台或桥接服务在线。
 
+有修改要交回时，可以说「把 v2 的第 73 帧交给这条意见复看」。`localhub_submit_master_fix` 将旧意见（含原帧和选区）连接到修订母版和指定帧，并记下改了什么。制作台的原意见下会出现「待复看」，展开即可看修订帧。创作者看过并明确表示接受或需要再改后，`localhub_record_master_verdict` 才记录这项决定、复看者称呼和反馈。每次提交或复核都会追加一条记录，可从旧意见追到后续各版。
+
 ## 在两个候选间保留切点
 
 在 Codex 里说「给我看第二镜原版和另一个候选，比较切入后第 12 帧」。`localhub_compare_takes` 返回同一时刻的两张图，A 是剪版当前使用的素材，B 是备选。可以换一个时间点再看。你选 A 会保留当前剪版，选 B 时 `localhub_choose_take` 只替换这一次出现的片段并保存新版。同一素材在别处的用法和独立声音轨都会保留。用 `localhub_read_project` 指定版号，可在另一次会话中读回旧剪版。

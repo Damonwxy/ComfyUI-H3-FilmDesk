@@ -224,6 +224,8 @@ main { max-width: 1352px; margin: auto; padding: 1.15rem 1rem 3rem; display: gri
 .region-editor > .quiet:empty { display: none; }
 .region-editor canvas { width: auto; max-width: 100%; max-height: 60vh; height: auto; cursor: crosshair; }
 .region-editor canvas:not([hidden]) { display: block; }
+#mr-history details { margin: .25rem 0 .75rem 1rem; }
+#mr-history details canvas { display: block; max-width: 100%; max-height: 50vh; object-fit: contain; }
 .finishing-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(12rem, auto);
