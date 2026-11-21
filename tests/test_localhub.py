@@ -785,6 +785,36 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([ref["tag"] for ref in info["references"]], ["<Picture 1>", "<Audio 1>", "<Video 1>", "<Audio 2>"])
             self.assertEqual(graph["1"]["inputs"]["unet_name"], "ref2va")
 
+    @unittest.skipUnless(shutil.which("ffmpeg"), "FFmpeg is required")
+    def test_preflight_counts_conformed_video_before_h3_grid_crop(self):
+        from localhub_preflight import compile_plan, confirm_plan
+        from localhub_media import video_frame_png
+
+        models = {"unet_ref2va": "ref2va", "text_encoder": "enc", "video_vae": "vvae", "audio_vae": "avae"}
+        params = dict(mode="r2v", models=models, prompt="<Video 1>", seed=1, duration_s=3)
+        active = types.SimpleNamespace(get_input_directory=lambda: str(self.root))
+        with patch.dict(sys.modules, {"folder_paths": active}):
+            for count, rate, prepared, end in [(36, 12, 72, 56), (73, 24, 73, 73), (80, 24, 73, 73), (4, 24, 4, 0)]:
+                with self.subTest(count=count, rate=rate):
+                    source = self.root / f"ref-{count}.mp4"
+                    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+                                    f"testsrc2=size=64x48:rate={rate}", "-frames:v", str(count),
+                                    "-c:v", "libx264", str(source)], check=True)
+                    options = dict(params, ref_videos=[str(source)])
+                    if not end:
+                        with self.assertRaisesRegex(ValueError, "至少需要 5 帧"):
+                            compile_plan("ad", "S01", options, None)
+                        continue
+                    _, info = compile_plan("ad", "S01", options, None)
+                    report = info["preflight"]
+                    self.assertEqual(report["video_ranges"], [dict(tag="<Video 1>", fps=24,
+                        prepared_frames=prepared, start_frame=0, end_frame=end, last_frame=end-1)])
+                    self.assertEqual(bool(report["warnings"]), prepared > end)
+                    path = self.root / info["references"][0]["input"]
+                    self.assertTrue(video_frame_png(path, end-1, "ffmpeg", thumbnail=True).startswith(b"\x89PNG"))
+                    submitted = dict(options, plan_sha256=report["plan_sha256"], take=report["take"])
+                    self.assertEqual(confirm_plan("ad", "S01", submitted)[1]["preflight"], report)
+
     def test_reviewed_preflight_binds_take_and_reference_content(self):
         active = types.SimpleNamespace(get_input_directory=lambda: str(self.root))
         source = self.root / "frame.png"

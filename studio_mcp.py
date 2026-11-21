@@ -124,10 +124,31 @@ def localhub_draft_plan_cut(project: str, revision: int, episode: str | None = N
 def localhub_preflight_shot(project: str, revision: int, shot_id: str, params: dict | None = None) -> dict:
     """Prepare a saved script shot with H3. Optional params include size, a decimal seed and extra references.
 
+    Video ranges use zero-based frames on the prepared 24 fps stream; end_frame is exclusive.
+    To inspect the last retained picture use localhub_preview_shot_reference_ends instead.
     Review info before submitting. Keep the returned submission, including its request key.
     """
     return bridge("video/preflight", project, {"project": project, "plan_shot": {"revision": revision, "shot_id": shot_id},
                                                "params": params or {}}, method="POST", timeout=60)
+
+
+@mcp.tool(annotations=ToolAnnotations(destructiveHint=False), structured_output=False)
+def localhub_preview_shot_reference_ends(project: str, revision: int, shot_id: str, params: dict | None = None):
+    """Preflight a saved shot and show the last picture H3 will use from each ordinary video reference.
+
+    Returns the usual preflight receipt and labeled PNGs. Review that receipt before using its
+    submission to generate. Lengths refer to the prepared 24 fps video, independently of audio.
+    """
+    result = bridge("video/preflight", project, {"project": project, "plan_shot": {"revision": revision,
+                    "shot_id": shot_id}, "params": params or {}, "preview_reference_ends": True},
+                    method="POST", timeout=240)
+    previews = result.pop("reference_previews", [])
+    content = [TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
+    for preview in previews:
+        png = preview.pop("png")
+        content.extend([TextContent(type="text", text=json.dumps(preview, ensure_ascii=False)),
+                        ImageContent(type="image", mimeType="image/png", data=png)])
+    return content
 
 
 @mcp.tool(annotations=ToolAnnotations(destructiveHint=False, idempotentHint=True))

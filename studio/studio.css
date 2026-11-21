@@ -171,6 +171,8 @@ main { max-width: 1352px; margin: auto; padding: 1.15rem 1rem 3rem; display: gri
   .input-row, .input-row.refs { grid-template-columns: 1fr; }
 }
 .quality-report > p { overflow-wrap: anywhere; }
+.quality-report figure { margin: .75rem 0; }
+.quality-report figure canvas { display: block; max-width: 100%; height: auto; }
 .frame-notes { border-top: 1px solid var(--line); }
 .frame-notes summary { padding: .65rem 0; cursor: pointer; font-weight: 650; }
 .frame-notes form { display: grid; gap: .65rem; margin-block: .4rem .7rem; }

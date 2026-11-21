@@ -22,15 +22,18 @@ def media_sha256(path):
     return digest.hexdigest()
 
 
-def video_frame_png(path, frame, ffmpeg):
+def video_frame_png(path, frame, ffmpeg, *, thumbnail=False):
     if not ffmpeg:
         raise NotImplementedError("抽取视频帧需要 FFmpeg")
     if type(frame) is not int or frame < 0:
         raise ValueError("视频帧号须为非负整数")
+    filters = f"select=eq(n\\,{frame})"
+    if thumbnail:
+        filters += ",scale=w='min(320,iw)':h='min(320,ih)':force_original_aspect_ratio=decrease"
     try:
         raw = subprocess.run([ffmpeg, "-v", "error", "-nostdin", "-protocol_whitelist", "file",
                               "-format_whitelist", "mov", "-i", str(path), "-map", "0:V:0",
-                              "-vf", f"select=eq(n\\,{frame})", "-frames:v", "1",
+                              "-vf", filters, "-frames:v", "1",
                               "-c:v", "png", "-f", "image2pipe", "-"], capture_output=True,
                              timeout=120, check=True).stdout
     except subprocess.SubprocessError as exc:
