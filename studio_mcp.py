@@ -269,11 +269,20 @@ def review_scope(project, binding):
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
-def localhub_read_master_frame(project: str, binding: str, frame: int) -> ImageContent:
-    """View the exact PNG frame of a checked master in chat. Frame numbers start at zero."""
+def localhub_read_master_frame(project: str, binding: str, frame: int, region: list[float] | None = None) -> ImageContent:
+    """View a checked master frame, or its native-pixel region, in chat. Frames start at zero.
+
+    Pass normalized left, top, right, bottom from a saved note to see just that detail.
+    For a fix, read the original and revised bindings at their respective frames. If framing
+    changed, inspect the revised full frame before choosing the corresponding region.
+    """
     spec = review_scope(project, binding)
+    if region is not None:
+        spec["region"] = region
     review = bridge("deliveries/master-review/frame", project, {**spec, "frame": frame},
                     method="POST", timeout=150)["review"]
+    if region is not None and review.get("region") != region:
+        raise ValueError("此制作台未返回指定选区，请更新服务后再查看局部画面")
     return ImageContent(type="image", mimeType="image/png", data=review["png"])
 
 
