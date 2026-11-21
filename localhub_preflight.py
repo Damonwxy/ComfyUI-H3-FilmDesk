@@ -6,10 +6,11 @@ import math
 import os
 import re
 import subprocess
+from fractions import Fraction
 from pathlib import Path
 
-from ffmpeg_tools import locate_ffmpeg
-from h3_graph import build_h3_graph
+from ffmpeg_tools import locate_ffmpeg, locate_ffprobe
+from h3_graph import build_control_video_graph, build_h3_graph
 from localhub_jobs import RequestConflict
 
 
@@ -37,6 +38,33 @@ def _video_range(ref, limit):
             "start_frame": 0, "end_frame": retained, "last_frame": retained - 1}
 
 
+def _control_range(ref, frames):
+    import folder_paths
+
+    probe = locate_ffprobe()
+    if not probe:
+        raise ValueError("控制视频预检需要 ffprobe")
+    path = Path(folder_paths.get_input_directory()) / ref["input"]
+    try:
+        result = subprocess.run([
+            probe, "-v", "error", "-protocol_whitelist", "file", "-format_whitelist", "mov,matroska,webm,avi",
+            "-select_streams", "v:0", "-count_frames", "-show_entries",
+            "stream=nb_read_frames,avg_frame_rate,start_pts:stream_disposition=attached_pic",
+            "-of", "json", str(path),
+        ], capture_output=True, check=True, timeout=90)
+        stream = json.loads(result.stdout)["streams"][0]
+        count = int(stream["nb_read_frames"])
+        fps = Fraction(stream["avg_frame_rate"])
+        if (result.stderr.strip() or count < 1 or fps <= 0 or int(stream.get("start_pts", 0)) < 0
+                or stream["disposition"]["attached_pic"]):
+            raise ValueError
+    except (OSError, subprocess.SubprocessError, KeyError, IndexError, ValueError, ZeroDivisionError) as exc:
+        raise ValueError("无法核实控制视频的帧数，请使用起始时间为零的 MP4、MOV、MKV、WebM 或 AVI 控制片") from exc
+    return {"tag": ref["tag"], "source_frames": count, "source_avg_fps": str(fps),
+            "target_frames": frames, "last_frame": min(count, frames) - 1,
+            "repeated_frames": max(0, frames - count), "dropped_frames": max(0, count - frames)}
+
+
 def _resolve_images(params, resolve):
     resolved, versions = dict(params), {}
 
@@ -60,8 +88,6 @@ def _resolve_images(params, resolve):
 
 
 def compile_plan(project, shot, params, take, resolve_reference=None, *, binding=None):
-    if params.get("control_video"):
-        raise ValueError("镜头预检支持 H3 标准模式。ControlNet 仍可从任务接口直接提交")
     prompt = params.get("prompt")
     if not isinstance(prompt, str) or not prompt.strip():
         raise ValueError("请填写镜头提示词")
@@ -71,7 +97,13 @@ def compile_plan(project, shot, params, take, resolve_reference=None, *, binding
             raise ValueError(f"{name} 须为正数")
 
     params, image_versions = _resolve_images(params, resolve_reference)
-    graph, info = build_h3_graph(params)
+    if params.get("control_video"):
+        graph, info = build_control_video_graph(params)
+        control = info["controlnet"]
+        if not 0 <= control["strength"] <= 10 or not 0 <= control["start_percent"] < control["end_percent"] <= 1:
+            raise ValueError("控制强度须在 0–10 之间，采样区间须满足 0 ≤ 开始 < 结束 ≤ 1")
+    else:
+        graph, info = build_h3_graph(params)
     frames = info["frames"]
     if take is None:
         take = {"start_frame": 0, "end_frame": frames}
@@ -83,6 +115,10 @@ def compile_plan(project, shot, params, take, resolve_reference=None, *, binding
     take = {"start_frame": start, "end_frame": end}
 
     refs = info["references"]
+    if "controlnet" in info:
+        control_ref = {"tag": "控制视频", "role": "control", "source": info["controlnet"]["control_video"],
+                       "input": graph["40"]["inputs"]["file"]}
+        refs.append(control_ref)
     if info["mode"] in ("i2v", "fl2v"):
         refs.append({"tag": "首帧", "role": "first_frame", "source": os.fspath(params["first_frame"]),
                      "input": graph["20"]["inputs"]["image"]})
@@ -119,6 +155,15 @@ def compile_plan(project, shot, params, take, resolve_reference=None, *, binding
     finally:
         output["filename_prefix"] = prefix
     info["preflight"] = {"plan_sha256": digest, "take": take, "warnings": warnings}
+    if "controlnet" in info:
+        if info["controlnet"]["strength"] == 0:
+            warnings.append("控制强度为 0，H3 将跳过运动控制。")
+        else:
+            span = _control_range(control_ref, frames)
+            info["preflight"]["control_range"] = span
+            if Fraction(span["source_avg_fps"]) != info["fps"]:
+                warnings.append(f"控制片平均为 {span['source_avg_fps']} fps，H3 按原帧顺序驱动 {info['fps']} fps 的镜头。"
+                                "如要保留动作速度，可先按目标帧率导出控制片。")
     ranges = [_video_range(ref, frames) for ref in refs if ref["role"] == "video"]
     if ranges:
         info["preflight"]["video_ranges"] = ranges
