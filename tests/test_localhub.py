@@ -3,6 +3,7 @@ import base64
 import json
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import types
@@ -355,6 +356,8 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         with patch("localhub_delivery.inspect_media", return_value=(str(self.file), "video", info)):
             binding = master_review(self.store, "fixture", spec, "read")["binding"]
             payload = dict(spec, binding=binding, annotation=annotation)
+            with self.assertRaisesRegex(ValueError, "区域须"):
+                master_review(self.store, "fixture", dict(payload, frame=9, region=[0, 0, 0, 1]), "frame")
             for _ in range(2):
                 self.assertEqual(master_review(self.store, "fixture", payload, "save")["notes"], [annotation])
             with self.assertRaises(ValueError):
@@ -371,6 +374,25 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         history = list_master_reviews(reopened, "fixture")["reviews"]
         self.assertEqual([(r["binding"], r["notes"]) for r in history], [(binding, [annotation])])
         self.assertEqual(list_master_reviews(reopened, "other")["reviews"], [])
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "FFmpeg is required")
+    def test_master_region_preserves_odd_bounds_and_16_bit_colour(self):
+        from localhub_media import crop_frame_png, normalized_region
+
+        def convert(data, args):
+            return subprocess.run(["ffmpeg", "-v", "error", "-nostdin", *args], input=data,
+                                  capture_output=True, check=True).stdout
+        # Distinct low bytes make accidental conversion to 8 bits observable.
+        raw = b"".join(struct.pack(">HHH", i*31, i*57+1, i*113+9) for i in range(11*9))
+        png = convert(raw, ["-f", "rawvideo", "-pix_fmt", "rgb48be", "-s", "11x9", "-i", "-",
+                            "-frames:v", "1", "-c:v", "png", "-f", "image2pipe", "-"])
+        for region, box in [([.1,.2,.6,.8], [1,1,7,8]), ([.99,.99,1,1], [10,8,11,9]),
+                            ([0,0,1,1], [0,0,11,9])]:
+            cropped, bounds, size = crop_frame_png(png, normalized_region(region), "ffmpeg")
+            self.assertEqual((bounds, size, cropped[24]), (box, [11,9], 16))
+            pixels = convert(cropped, ["-f", "image2pipe", "-i", "-", "-f", "rawvideo", "-pix_fmt", "rgb48be", "-"])
+            x, y, r, b = box
+            self.assertEqual(pixels, b"".join(raw[(j*11+x)*6:(j*11+r)*6] for j in range(y,b)))
 
     def test_followup_keeps_exact_note_target_and_verdict_history(self):
         project = "review"
@@ -932,6 +954,47 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
                     self.assertTrue(video_frame_png(path, end-1, "ffmpeg", thumbnail=True).startswith(b"\x89PNG"))
                     submitted = dict(options, plan_sha256=report["plan_sha256"], take=report["take"])
                     self.assertEqual(confirm_plan("ad", "S01", submitted)[1]["preflight"], report)
+
+    @unittest.skipUnless(shutil.which("ffprobe") and shutil.which("ffmpeg"), "FFmpeg and ffprobe are required")
+    def test_control_preflight_uses_original_frame_indices_and_binds_input(self):
+        from localhub_media import video_frame_png
+        from localhub_preflight import compile_plan, confirm_plan
+
+        models = dict(unet="model", text_encoder="enc", video_vae="video", audio_vae="audio", model_patch="patch")
+        source = self.root / "depth.mkv"
+        params = dict(models=models, control_video=str(source), prompt="Orbit", duration_s=3, seed=7)
+        active = types.SimpleNamespace(get_input_directory=lambda: str(self.root))
+        with patch.dict(sys.modules, {"folder_paths": active}):
+            previous = None
+            for count, rate in [(1, 24), (72, 12), (73, 24), (80, 24)]:
+                with self.subTest(count=count):
+                    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                                    f"testsrc2=size=64x48:rate={rate}", "-frames:v", str(count),
+                                    "-c:v", "ffv1", str(source)], check=True)
+                    graph, info = compile_plan("ad", "S01", params, None)
+                    span = info["preflight"]["control_range"]
+                    self.assertEqual(span, dict(tag="控制视频", source_frames=count, source_avg_fps=str(rate),
+                        target_frames=73, last_frame=min(count, 73)-1, repeated_frames=max(0, 73-count),
+                        dropped_frames=max(0, count-73)))
+                    self.assertEqual(bool(info["preflight"]["warnings"]), rate != 24)
+                    self.assertEqual(graph["9"]["inputs"]["model"], ["43", 0])
+                    copied = self.root / graph["40"]["inputs"]["file"]
+                    self.assertEqual(copied.read_bytes(), source.read_bytes())
+                    self.assertTrue(video_frame_png(copied, span["last_frame"], "ffmpeg",
+                                                    thumbnail=True, control=True).startswith(b"\x89PNG"))
+                    if previous:
+                        with self.assertRaises(RequestConflict):
+                            confirm_plan("ad", "S01", previous)
+                    previous = dict(params, take=info["preflight"]["take"], plan_sha256=info["preflight"]["plan_sha256"])
+                    self.assertEqual(confirm_plan("ad", "S01", previous)[1]["preflight"], info["preflight"])
+            with self.assertRaises(RequestConflict):
+                confirm_plan("ad", "S01", dict(previous, control_strength=0.5))
+            _, info = compile_plan("ad", "S01", dict(params, control_strength=0), None)
+            self.assertNotIn("control_range", info["preflight"])
+            self.assertTrue(info["preflight"]["warnings"])
+            for changes in [dict(control_strength=float("nan")), dict(control_end=0.2, control_start=0.8)]:
+                with self.assertRaisesRegex(ValueError, "控制强度"):
+                    compile_plan("ad", "S01", dict(params, **changes), None)
 
     def test_reviewed_preflight_binds_take_and_reference_content(self):
         active = types.SimpleNamespace(get_input_directory=lambda: str(self.root))

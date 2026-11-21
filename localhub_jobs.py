@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from aiohttp import ClientError, ClientSession, ClientTimeout
 
-from localhub_media import candidate_file
+from localhub_media import candidate_file, normalized_region
 from localhub_storage import RequestConflict
 
 
@@ -201,13 +201,9 @@ class Jobs:
                     raise ValueError("批注须为 1–1000 个字符")
                 values = (job_id, index, stamp, frame, note.strip())
                 if "region" in new:
-                    region = new["region"]
-                    if (not isinstance(region, list) or len(region) != 4
-                            or not all(type(v) in (int, float) and 0 <= v <= 1 for v in region)
-                            or region[0] >= region[2] or region[1] >= region[3]):
-                        raise ValueError("区域须为源画面内的左、上、右、下四个归一化坐标")
+                    region = normalized_region(new["region"])
                     db.execute("INSERT OR IGNORE INTO frame_region_notes VALUES (?,?,?,?,?,?)",
-                               (*values, _json([float(v) for v in region])))
+                               (*values, _json(region)))
                 else:
                     db.execute("INSERT OR IGNORE INTO frame_notes VALUES (?,?,?,?,?)", values)
             keys = (job_id, index, stamp)

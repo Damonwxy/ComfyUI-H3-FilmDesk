@@ -125,19 +125,22 @@ def localhub_preflight_shot(project: str, revision: int, shot_id: str, params: d
     """Prepare a saved script shot with H3. Optional params include size, a decimal seed and extra references.
 
     Video ranges use zero-based frames on the prepared 24 fps stream; end_frame is exclusive.
+    Pass control_video for a local depth or edge clip. control_range reports original frame indices,
+    repeated and dropped frames. Optional control_strength, control_start and control_end configure the patch.
     To inspect the last retained picture use localhub_preview_shot_reference_ends instead.
     Review info before submitting. Keep the returned submission, including its request key.
     """
     return bridge("video/preflight", project, {"project": project, "plan_shot": {"revision": revision, "shot_id": shot_id},
-                                               "params": params or {}}, method="POST", timeout=60)
+                                               "params": params or {}}, method="POST", timeout=240)
 
 
 @mcp.tool(annotations=ToolAnnotations(destructiveHint=False), structured_output=False)
 def localhub_preview_shot_reference_ends(project: str, revision: int, shot_id: str, params: dict | None = None):
-    """Preflight a saved shot and show the last picture H3 will use from each ordinary video reference.
+    """Preflight a saved shot and show the last source picture used from each video reference or control_video.
 
     Returns the usual preflight receipt and labeled PNGs. Review that receipt before using its
-    submission to generate. Lengths refer to the prepared 24 fps video, independently of audio.
+    submission to generate. Ordinary references use the prepared 24 fps stream. Depth and edge control
+    use original decoded frame indices before center crop. A zero-strength control supplies no preview.
     """
     result = bridge("video/preflight", project, {"project": project, "plan_shot": {"revision": revision,
                     "shot_id": shot_id}, "params": params or {}, "preview_reference_ends": True},
@@ -157,7 +160,7 @@ def localhub_submit_shot(project: str, submission: dict) -> dict:
     body, key = submission.get("body"), submission.get("key")
     if not isinstance(body, dict) or body.get("project") != project or not body.get("plan_shot") or not isinstance(key, str):
         raise ValueError("请使用当前项目的镜头预检回执")
-    return bridge("jobs", project, body, method="POST", headers={"Idempotency-Key": key}, timeout=60)
+    return bridge("jobs", project, body, method="POST", headers={"Idempotency-Key": key}, timeout=240)
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, untrustedContentHint=True), structured_output=False)
@@ -305,11 +308,20 @@ def localhub_link_review_artwork(project: str, source_binding: str, annotation: 
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
-def localhub_read_master_frame(project: str, binding: str, frame: int) -> ImageContent:
-    """View the exact PNG frame of a checked master in chat. Frame numbers start at zero."""
+def localhub_read_master_frame(project: str, binding: str, frame: int, region: list[float] | None = None) -> ImageContent:
+    """View a checked master frame, or its native-pixel region, in chat. Frames start at zero.
+
+    Pass normalized left, top, right, bottom from a saved note to see just that detail.
+    For a fix, read the original and revised bindings at their respective frames. If framing
+    changed, inspect the revised full frame before choosing the corresponding region.
+    """
     spec = review_scope(project, binding)
+    if region is not None:
+        spec["region"] = region
     review = bridge("deliveries/master-review/frame", project, {**spec, "frame": frame},
                     method="POST", timeout=150)["review"]
+    if region is not None and review.get("region") != region:
+        raise ValueError("此制作台未返回指定选区，请更新服务后再查看局部画面")
     return ImageContent(type="image", mimeType="image/png", data=review["png"])
 
 
