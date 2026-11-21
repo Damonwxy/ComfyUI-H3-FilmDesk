@@ -16,7 +16,7 @@ from localhub_audio_qc import REPORT_VERSION, inspect_audio, inspect_cut_audio
 from localhub_compare import compare_takes
 from localhub_copy import list_copy, update_copy
 from localhub_delivery import describe_video_sources, verify_master
-from localhub_master_review import list_master_reviews, master_review
+from localhub_master_review import list_master_reviews, master_review, record_followup
 from localhub_jobs import Jobs
 from localhub_media import file_stamp, inspect_media, probe_media
 from localhub_project_plan import plan_cut, read_project_plan, save_project_plan
@@ -403,8 +403,11 @@ async def e_master_review(request):
         project = _label(request.query.get("project"), "project")
         if request.method == "GET":
             return _ok(list_master_reviews(_context(request).jobs(), project))
-        result = await asyncio.to_thread(master_review, _context(request).jobs(), project,
-                                         await _body(request), request.match_info["action"])
+        action = request.match_info["action"]
+        if action == "followup":
+            event = await asyncio.to_thread(record_followup, _context(request).jobs(), project, await _body(request))
+            return _ok({"event": event})
+        result = await asyncio.to_thread(master_review, _context(request).jobs(), project, await _body(request), action)
         return _ok({"review": result})
     except RequestConflict as exc:
         return _err(409, str(exc))
@@ -523,7 +526,7 @@ def register_project_routes(app, table, *, jobs, input_directory, generation_ena
     table.get("/localhub/v2/deliveries/subtitles.srt")(e_subtitles)
     table.post("/localhub/v2/deliveries/master-check")(e_master_check)
     table.get("/localhub/v2/deliveries/master-review")(e_master_review)
-    table.post("/localhub/v2/deliveries/master-review/{action:read|frame|save}")(e_master_review)
+    table.post("/localhub/v2/deliveries/master-review/{action:read|frame|save|followup}")(e_master_review)
     table.get("/localhub/v2/ad-copy")(e_copy)
     table.post("/localhub/v2/ad-copy")(e_copy)
     table.put("/localhub/v2/ad-copy")(e_copy)

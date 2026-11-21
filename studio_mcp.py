@@ -216,7 +216,11 @@ def localhub_prepare_delivery(project: str, revision: int, name: str, market: st
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, untrustedContentHint=True))
 def localhub_list_master_reviews(project: str) -> dict:
-    """Find registered deliveries and saved master-frame notes for a project, including historical cuts."""
+    """Find registered deliveries, original master notes and followups, including historical cuts.
+
+    Each followup links one original annotation to a revised master binding and frame. Its version
+    counts events for that annotation, starting at 1. A submitted fix is awaiting human review.
+    """
     if database:
         from localhub_master_review import list_master_reviews
         return list_master_reviews(ProjectDatabase(database), project)
@@ -267,6 +271,36 @@ def localhub_save_master_note(project: str, binding: str, frame: int, note: str,
 def localhub_read_job(project: str, job_id: str) -> dict:
     """Recover the native status and media of one job in the given project."""
     return bridge("jobs/" + str(UUID(job_id)), project)
+
+
+@mcp.tool(annotations=ToolAnnotations(destructiveHint=False, idempotentHint=True))
+def localhub_submit_master_fix(project: str, source_binding: str, annotation: dict, target_binding: str,
+                               target_frame: int, comment: str, expected_version: int) -> dict:
+    """Link an original saved note to the actual revised master/frame and describe the change.
+
+    Use the exact annotation including region from list_master_reviews. Use expected_version=0
+    for its first event, otherwise the latest event version. Submission leaves the fix pending review.
+    """
+    payload = dict(source_binding=source_binding, annotation=annotation, target_binding=target_binding,
+                   target_frame=target_frame, comment=comment, expected_version=expected_version, state="submitted")
+    return bridge("deliveries/master-review/followup", project, payload, method="POST", timeout=120)["event"]
+
+
+@mcp.tool(annotations=ToolAnnotations(destructiveHint=False, idempotentHint=True))
+def localhub_record_master_verdict(project: str, source_binding: str, annotation: dict, target_binding: str,
+                                   target_frame: int, expected_version: int, decision: str, reviewer: str,
+                                   comment: str) -> dict:
+    """Record a human reviewer's explicit decision on this pending fix: accepted or changes_requested.
+
+    Show the relevant frames with read_master_frame. Wait for the human's verdict and use their feedback
+    and name or handle. A successful render, test or the assistant's own opinion is never a human verdict.
+    """
+    if decision not in ("accepted", "changes_requested"):
+        raise ValueError("请选择接受本次修改或继续修改")
+    payload = dict(source_binding=source_binding, annotation=annotation, target_binding=target_binding,
+                   target_frame=target_frame, expected_version=expected_version, state=decision,
+                   reviewer=reviewer, comment=comment)
+    return bridge("deliveries/master-review/followup", project, payload, method="POST", timeout=120)["event"]
 
 
 if __name__ == "__main__":
