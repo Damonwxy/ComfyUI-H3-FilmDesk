@@ -1449,7 +1449,17 @@ function renderPlan(info, previews = []) {
     + info.frames + " 帧（" + info.duration_s + " 秒） · 取用 [" + take.start_frame + ", " + take.end_frame + ")"));
   panel.append(node("p", [info.models.unet, info.models.lora].filter(Boolean).join(" · "), "quiet"));
   if (info.planned_shot) panel.append(node("p", "项目编排 v" + info.planned_shot.revision, "quiet"));
+  const plan = info.preflight.reference_plan;
+  if (plan) {
+    for (const [label, text] of [["动作", plan.action], ["入镜", plan.entry], ["出镜", plan.exit]]) {
+      if (text) panel.append(node("p", label + " · " + text));
+    }
+    for (const ref of plan.references) {
+      if (ref.role) panel.append(node("p", ref.asset_id + " v" + ref.revision + " · " + ref.role, "quiet"));
+    }
+  }
   if (info.references.length) {
+    panel.append(node("p", "工作流输入"));
     const refs = node("ul");
     for (const ref of info.references) {
       const label = ref.version ? ref.version.asset_id + " v" + ref.version.revision + " · " + ref.source : ref.source;

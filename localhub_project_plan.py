@@ -224,7 +224,7 @@ def plan_cut(jobs, project, plan_revision, episode_id=None):
             "timeline": timeline, "unselected": unselected}
 
 
-def bind_h3_shot(jobs, project, binding, options, take):
+def bind_h3_shot(jobs, project, binding, options, take, *, reference_plan=None):
     """Use the immutable plan named by an H3 request and keep its identity in the receipt."""
     if not isinstance(binding, dict):
         raise ValueError("镜头编排须指定版号与镜头编号")
@@ -260,4 +260,7 @@ def bind_h3_shot(jobs, project, binding, options, take):
         params["mode"] = "r2v" if any(params.get(key) for key in ("ref_images", "ref_videos", "ref_audios")) else "t2v"
     if take is None:
         take = {"start_frame": 0, "end_frame": frames}
+    if reference_plan is not None:
+        reference_plan.update(action=shot["action"], entry=shot["entry"], exit=shot["exit"],
+                              references=shot["references"])
     return shot["title"], params, take, {"revision": revision, "shot_id": shot_id}
