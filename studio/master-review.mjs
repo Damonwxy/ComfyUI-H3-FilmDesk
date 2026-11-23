@@ -18,7 +18,7 @@ export function initMasterReview({ el, node, send }) {
   const draftKey = () => JSON.stringify([binding, selected]);
 
   function stash() {
-    if (picture && (note.value || region || anchor)) drafts.set(draftKey(), {text:note.value, region, anchor, cursor});
+    if (picture && (note.value || last.value || region || anchor)) drafts.set(draftKey(), {text:note.value, last:last.value, region, anchor, cursor});
     else if (picture) drafts.delete(draftKey());
   }
   function controls() {
@@ -143,7 +143,7 @@ export function initMasterReview({ el, node, send }) {
       const draft = drafts.get(draftKey());
       region = saved ? saved.region || null : draft?.region || null;
       anchor = saved ? null : draft?.anchor || null; cursor = draft?.cursor || [.5,.5];
-      if (saved?.end_frame !== undefined) last.value = saved.end_frame - 1;
+      last.value = saved ? (saved.end_frame === undefined ? "" : saved.end_frame - 1) : draft?.last || "";
       last.min = selected; last.max = review.frames - 1;
       note.value = saved ? saved.note : draft?.text || ""; note.disabled = false;
       canvas.width = bitmap.width; canvas.height = bitmap.height; canvas.hidden = false; draw();
@@ -189,7 +189,8 @@ export function initMasterReview({ el, node, send }) {
   };
   el("mr-locate").onclick = () => locate();
   placement.onchange = () => locate();
-  position.oninput = note.oninput = controls;
+  position.oninput = () => { clearClip(); controls(); };
+  note.oninput = controls;
   panel.ontoggle = () => { if (panel.open && spec && !picture && !busy) locate(); };
   el("mr-save").onclick = async () => {
     if (el("mr-save").disabled) return;
