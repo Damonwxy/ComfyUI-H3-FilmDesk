@@ -128,6 +128,7 @@ def localhub_preflight_shot(project: str, revision: int, shot_id: str, params: d
     Pass control_video for a local depth or edge clip. control_range reports original frame indices,
     repeated and dropped frames. Optional control_strength, control_start and control_end configure the patch.
     To inspect the last retained picture use localhub_preview_shot_reference_ends instead.
+    Compare reference_plan (planned roles including review-only images) with info.references (workflow inputs).
     Review info before submitting. Keep the returned submission, including its request key.
     """
     return bridge("video/preflight", project, {"project": project, "plan_shot": {"revision": revision, "shot_id": shot_id},
