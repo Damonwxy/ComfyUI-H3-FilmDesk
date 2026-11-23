@@ -248,8 +248,10 @@ async def v_preflight(request):
             raise ValueError("params 须为对象")
         project = _label(p.get("project"), "project", "本地项目")
         binding, params, take = None, p["params"], p.get("take")
+        reference_plan = {}
         if "plan_shot" in p:
-            shot, params, take, binding = bind_h3_shot(_jobs(), project, p["plan_shot"], params, take)
+            shot, params, take, binding = bind_h3_shot(_jobs(), project, p["plan_shot"], params, take,
+                                                       reference_plan=reference_plan)
         else:
             shot = _label(p.get("shot"), "shot")
         graph, info = await asyncio.to_thread(
@@ -260,6 +262,13 @@ async def v_preflight(request):
             failures = [issue["details"] or issue["message"]
                         for node in node_errors.values() for issue in node["errors"]]
             raise ValueError("ComfyUI 工作流预检失败 · " + " · ".join(failures[:3] or [error["message"]]))
+        if reference_plan:
+            info["preflight"]["reference_plan"] = reference_plan
+            review = [f"{ref['asset_id']} v{ref['revision']}" for ref in reference_plan["references"]
+                      if ref["use"] == "review"]
+            if review:
+                info["preflight"]["warnings"].append("编排中仅供审片的引用：" + "、".join(review)
+                                                      + "。模型实际接收的素材见输入清单。")
         previews = []
         if p.get("preview_reference_ends") is True:
             inputs = {ref["tag"]: ref for ref in info["references"]}

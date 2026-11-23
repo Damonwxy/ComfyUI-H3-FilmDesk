@@ -292,7 +292,11 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         old = read_project_plan(offline, "fixture", 1)
         self.assertEqual(old["plan"]["episodes"][0]["cut_revision"], 1)
         self.assertEqual(old["plan"]["shots"][1]["references"][0]["revision"], 1)
-        title, params, take, identity = bind_h3_shot(offline, "fixture", dict(revision=2, shot_id="S2"), {}, None)
+        reference_plan = {}
+        title, params, take, identity = bind_h3_shot(offline, "fixture", dict(revision=2, shot_id="S2"),
+                                                     {}, None, reference_plan=reference_plan)
+        saved_shot = next(s for s in read_project_plan(offline, "fixture", 2)["plan"]["shots"] if s["id"] == "S2")
+        self.assertEqual(reference_plan["references"], saved_shot["references"])
         self.assertEqual((title, take, identity), ("返场", {"start_frame": 0, "end_frame": 36}, {"revision": 2, "shot_id": "S2"}))
         self.assertEqual((params["mode"], params["first_frame"]), ("i2v", {"asset_id": "演员", "revision": 2}))
         self.file.unlink()
