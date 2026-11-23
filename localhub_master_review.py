@@ -2,6 +2,8 @@
 
 import base64
 import json
+import subprocess
+from fractions import Fraction
 
 import ffmpeg_tools
 from localhub_delivery import verify_master
@@ -37,6 +39,17 @@ def _artwork_history(db, project, binding=None):
             for r in db.execute(sql + " ORDER BY source,note,version", args)]
 
 
+def _range_notes(db, project, binding=None):
+    if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='master_range_notes'").fetchone():
+        return []
+    sql = "SELECT binding,frame,end_frame,note FROM master_range_notes WHERE project=?"
+    args = [project]
+    if binding is not None:
+        sql += " AND binding=?"
+        args.append(binding)
+    return db.execute(sql + " ORDER BY frame,end_frame,note", args).fetchall()
+
+
 def list_master_reviews(jobs, project):
     """Read recorded opinions even if the reviewed file is offline or has changed."""
     with jobs.db() as db:
@@ -58,6 +71,10 @@ def list_master_reviews(jobs, project):
                 if row["region"]:
                     item["region"] = json.loads(row["region"])
                 scopes[binding]["notes"].append(item)
+        for row in _range_notes(db, project):
+            binding = row["binding"]
+            scope = scopes.setdefault(binding, {**json.loads(binding), "binding": binding, "notes": []})
+            scope["notes"].append({k: row[k] for k in ("frame", "end_frame", "note")})
         for event in _followups(db, project):
             scopes[event["source_binding"]].setdefault("followups", []).append(event)
         for record in _artwork_history(db, project):
@@ -85,6 +102,46 @@ def master_review(jobs, project, spec, action):
     if action != "read" and spec.get("binding") != binding:
         raise RequestConflict("母版或交付版式已变，请重读原帧后继续")
     result = {**scope, "filename": path.name, "frames": info["frames"], "fps": info["fps"], "binding": binding}
+    if action == "motion":
+        start, end = spec.get("frame"), spec.get("end_frame")
+        if type(start) is not int or type(end) is not int or not 0 <= start < end <= info["frames"] or end-start > 96:
+            raise ValueError("请选择母版内连续的 1–96 帧，结束帧不包含在内")
+        def window(first, stop):
+            return (f"trim=start_frame={first}:end_frame={stop},setpts=PTS-STARTPTS,"
+                    "scale=320:320:force_original_aspect_ratio=decrease,pad=320:320:(ow-iw)/2:(oh-ih)/2,setsar=1")
+        def source(filename):
+            return ["-protocol_whitelist", "file", "-format_whitelist", "mov", "-i", str(filename)]
+        inputs = source(path)
+        filters = "[0:V:0]" + window(start, end) + "[out]"
+        compare = spec.get("compare")
+        if compare is not None:
+            if not isinstance(compare, dict):
+                raise ValueError("请选择用于对照的母版与起帧")
+            scope_b = _scope(compare.get("binding"), project)
+            cut_b = require_delivery(jobs, project, scope_b["delivery"])
+            path_b, stamp_b, info_b = verify_master(jobs, project, cut_b, scope_b["delivery"]["aspect"],
+                                                    scope_b["master"], None, ffmpeg_tools.locate_ffprobe())
+            if media_sha256(path_b) != scope_b["master"].get("sha256"):
+                raise RequestConflict("对照母版已变动")
+            duration = Fraction(end-start) / Fraction(str(info["fps"]))
+            count_b = max(1, round(duration * Fraction(str(info_b["fps"]))))
+            first_b = compare.get("frame")
+            if type(first_b) is not int or not 0 <= first_b <= info_b["frames"]-count_b:
+                raise ValueError("对照帧段超出母版范围")
+            inputs += source(path_b)
+            filters = ("[0:V:0]" + window(start, end) + "[a];[1:V:0]" + window(first_b, first_b+count_b)
+                       + f",fps={info['fps']}[b];[a][b]hstack=shortest=1[out]")
+        try:
+            proc = subprocess.run([ffmpeg_tools.locate_ffmpeg(), "-nostdin", "-v", "error", *inputs,
+                                   "-filter_complex", filters, "-map", "[out]", "-an", "-loop", "0",
+                                   "-f", "gif", "pipe:1"], capture_output=True, timeout=120)
+        except subprocess.TimeoutExpired as exc:
+            raise ValueError("运动预览解码超时") from exc
+        if compare is not None and file_stamp(path_b) != stamp_b:
+            raise RequestConflict("解码期间对照母版已变动")
+        if proc.returncode or not proc.stdout.startswith(b"GIF"):
+            raise ValueError("母版运动片段解码失败")
+        result.update(frame=start, end_frame=end, gif=base64.b64encode(proc.stdout).decode("ascii"))
     if action == "frame":
         frame = spec.get("frame")
         if type(frame) is not int or not 0 <= frame < info["frames"]:
@@ -98,16 +155,31 @@ def master_review(jobs, project, spec, action):
         result.update(frame=frame, png=base64.b64encode(raw).decode("ascii"))
     if file_stamp(path) != stamp:
         raise RequestConflict("核对时母版文件已变动，请重新打开")
-    if action != "frame":
+    if action not in ("frame", "motion"):
         new = None
         if action == "save":
             note = spec.get("annotation")
             if not isinstance(note, dict):
                 raise ValueError("请提交母版帧意见")
-            new = {**note, "stamp": binding}
+            if "end_frame" in note:
+                frame, end, text = note.get("frame"), note["end_frame"], note.get("note")
+                if (type(frame) is not int or type(end) is not int or not 0 <= frame < end <= info["frames"]
+                        or not isinstance(text, str) or not 1 <= len(text.strip()) <= 1000 or "region" in note):
+                    raise ValueError("请选择母版内的帧段并填写 1–1000 字的意见")
+                with jobs.db() as db:
+                    db.execute("""CREATE TABLE IF NOT EXISTS master_range_notes (
+                        project TEXT NOT NULL,binding TEXT NOT NULL,frame INTEGER NOT NULL,end_frame INTEGER NOT NULL,
+                        note TEXT NOT NULL,PRIMARY KEY(project,binding,frame,end_frame,note))""")
+                    db.execute("INSERT OR IGNORE INTO master_range_notes VALUES (?,?,?,?,?)",
+                               (project, binding, frame, end, text.strip()))
+            else:
+                new = {**note, "stamp": binding}
         result["notes"] = jobs.frame_notes(master["job_id"], master["file_index"], binding, info["frames"], new)
         with jobs.db() as db:
             db.execute("BEGIN")
+            result["notes"].extend({k: row[k] for k in ("frame", "end_frame", "note")}
+                                   for row in _range_notes(db, project, binding))
+            result["notes"].sort(key=lambda n: n["frame"])
             result["followups"] = _followups(db, project, binding)
             result["artwork_history"] = _artwork_history(db, project, binding)
     return result
@@ -133,6 +205,8 @@ def _note_key(jobs, project, source, annotation):
     if row is None or row["project"] != project:
         raise LookupError("找不到原意见所在的母版")
     notes = jobs.frame_notes(job_id, index, source, None)
+    with jobs.db() as db:
+        notes.extend({k: row[k] for k in ("frame", "end_frame", "note")} for row in _range_notes(db, project, source))
     note = next((n for n in notes if n == annotation), None)
     if note is None:
         raise LookupError("找不到该帧和选区的原始意见")

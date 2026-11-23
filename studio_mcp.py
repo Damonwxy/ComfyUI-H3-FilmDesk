@@ -308,6 +308,19 @@ def localhub_link_review_artwork(project: str, source_binding: str, annotation: 
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
+def localhub_read_master_motion(project: str, binding: str, frame: int, end_frame: int,
+                                compare_binding: str | None = None, compare_frame: int | None = None) -> ImageContent:
+    """View up to 96 consecutive silent master frames in chat. End frame is exclusive."""
+    spec = dict(review_scope(project, binding), frame=frame, end_frame=end_frame)
+    if compare_binding is not None or compare_frame is not None:
+        if not compare_binding or compare_frame is None:
+            raise ValueError("同步对照需要另一份母版回执与对应起帧")
+        spec["compare"] = dict(binding=compare_binding, frame=compare_frame)
+    result = bridge("deliveries/master-review/motion", project, spec, method="POST", timeout=150)
+    return ImageContent(type="image", mimeType="image/gif", data=result["review"]["gif"])
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
 def localhub_read_master_frame(project: str, binding: str, frame: int, region: list[float] | None = None) -> ImageContent:
     """View a checked master frame, or its native-pixel region, in chat. Frames start at zero.
 
@@ -326,13 +339,16 @@ def localhub_read_master_frame(project: str, binding: str, frame: int, region: l
 
 
 @mcp.tool(annotations=ToolAnnotations(destructiveHint=False, idempotentHint=True, untrustedContentHint=True))
-def localhub_save_master_note(project: str, binding: str, frame: int, note: str, region: list[float] | None = None) -> dict:
+def localhub_save_master_note(project: str, binding: str, frame: int, note: str, region: list[float] | None = None,
+                              end_frame: int | None = None) -> dict:
     """Save an opinion at a zero-based frame using the exact binding from read_master_review.
 
     Optional region is normalized left, top, right, bottom. A changed master must be reviewed again.
     """
     spec = review_scope(project, binding)
     annotation = {"frame": frame, "note": note}
+    if end_frame is not None:
+        annotation["end_frame"] = end_frame
     if region is not None:
         annotation["region"] = region
     return bridge("deliveries/master-review/save", project, {**spec,
