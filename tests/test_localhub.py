@@ -366,6 +366,12 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(master_review(self.store, "fixture", payload, "save")["notes"], [annotation])
             with self.assertRaises(ValueError):
                 master_review(self.store, "fixture", dict(payload, annotation=dict(annotation, frame=10)), "save")
+            span = dict(frame=3, end_frame=7, note="Inspect motion")
+            for _ in range(2):
+                self.assertEqual(master_review(self.store, "fixture", dict(payload, annotation=span), "save")["notes"],
+                                 [span, annotation])
+            with self.assertRaises(ValueError):
+                master_review(self.store, "fixture", dict(payload, frame=9, end_frame=11), "motion")
             alternate = dict(payload, placement="youtube-vertical-2026-11-20")
             with self.assertRaises(RequestConflict):
                 master_review(self.store, "fixture", alternate, "save")
@@ -373,10 +379,20 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
             other = dict(delivery, name="Second delivery")
             register_delivery(self.store, "fixture", other)
             self.assertEqual(master_review(self.store, "fixture", dict(spec, delivery=other), "read")["notes"], [])
+        if shutil.which("ffmpeg"):
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=144x256:rate=24",
+                            "-frames:v", "10", "-c:v", "libx264", "-f", "mp4", str(self.file)], check=True)
+            with patch("localhub_delivery.inspect_media", return_value=(str(self.file), "video", info)):
+                current = master_review(self.store, "fixture", spec, "read")["binding"]
+                pair = dict(spec, binding=current, frame=0, end_frame=5, compare=dict(binding=current, frame=5))
+                motion = master_review(self.store, "fixture", pair, "motion")
+                from io import BytesIO
+                with Image.open(BytesIO(base64.b64decode(motion["gif"]))) as gif:
+                    self.assertEqual((gif.size, gif.n_frames), ((640, 320), 5))
         self.file.unlink()
         reopened = ProjectDatabase(self.store.path)
         history = list_master_reviews(reopened, "fixture")["reviews"]
-        self.assertEqual([(r["binding"], r["notes"]) for r in history], [(binding, [annotation])])
+        self.assertEqual([(r["binding"], r["notes"]) for r in history], [(binding, [span, annotation])])
         self.assertEqual(list_master_reviews(reopened, "other")["reviews"], [])
 
     @unittest.skipUnless(shutil.which("ffmpeg"), "FFmpeg is required")

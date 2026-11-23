@@ -6,6 +6,11 @@ function decodeFrame(png) {
 export function initMasterReview({ el, node, send }) {
   const panel = el("master-review"), canvas = el("mr-picture"), pen = canvas.getContext("2d");
   const position = el("mr-frame"), placement = el("mr-placement"), note = el("mr-note");
+  const last = el("mr-last"), clip = el("mr-clip");
+  function clearClip() {
+    if (clip.hasAttribute("src")) URL.revokeObjectURL(clip.src);
+    clip.removeAttribute("src"); clip.hidden = true;
+  }
   const drafts = new Map();
   let spec, binding, selected, picture, region, anchor, cursor, generation = 0;
   let busy = false;
@@ -13,7 +18,7 @@ export function initMasterReview({ el, node, send }) {
   const draftKey = () => JSON.stringify([binding, selected]);
 
   function stash() {
-    if (picture && (note.value || region || anchor)) drafts.set(draftKey(), {text:note.value, region, anchor, cursor});
+    if (picture && (note.value || last.value || region || anchor)) drafts.set(draftKey(), {text:note.value, last:last.value, region, anchor, cursor});
     else if (picture) drafts.delete(draftKey());
   }
   function controls() {
@@ -21,6 +26,7 @@ export function initMasterReview({ el, node, send }) {
     el("mr-clear").hidden = !region && !anchor;
   }
   function clearFrame() {
+    clearClip(); last.value = "";
     picture?.close(); picture = null;
     selected = region = anchor = null; cursor = [.5,.5];
     canvas.hidden = true; note.value = ""; note.disabled = true; controls();
@@ -88,10 +94,12 @@ export function initMasterReview({ el, node, send }) {
     const list = el("mr-history"); list.replaceChildren();
     if (!notes.length) list.textContent = "这份母版在当前版式下暂无意见。";
     for (const item of notes) {
-      const button = node("button", "第 " + item.frame + " 帧 · " + item.note);
+      const range = item.end_frame === undefined ? item.frame : item.frame + "–" + (item.end_frame - 1);
+      const button = node("button", "第 " + range + " 帧 · " + item.note);
       button.type = "button"; button.onclick = () => { position.value = item.frame; locate(item); };
       list.append(button);
       const matches = ({annotation}) => item.frame === annotation.frame && item.note === annotation.note &&
+        item.end_frame === annotation.end_frame &&
         JSON.stringify(item.region) === JSON.stringify(annotation.region);
       for (const record of artworks.filter(matches)) {
         list.append(node("p", "字稿依据 " + record.version + " · " + record.reference.asset_id + " v"
@@ -135,6 +143,8 @@ export function initMasterReview({ el, node, send }) {
       const draft = drafts.get(draftKey());
       region = saved ? saved.region || null : draft?.region || null;
       anchor = saved ? null : draft?.anchor || null; cursor = draft?.cursor || [.5,.5];
+      last.value = saved ? (saved.end_frame === undefined ? "" : saved.end_frame - 1) : draft?.last || "";
+      last.min = selected; last.max = review.frames - 1;
       note.value = saved ? saved.note : draft?.text || ""; note.disabled = false;
       canvas.width = bitmap.width; canvas.height = bitmap.height; canvas.hidden = false; draw();
       status("成片第 " + selected + " 帧 · " + (saved ? "已定位到保存的意见。" : "可以在画面上框选两个对角点。"));
@@ -165,14 +175,32 @@ export function initMasterReview({ el, node, send }) {
   };
   canvas.onfocus = canvas.onblur = draw;
   el("mr-clear").onclick = () => { anchor = region = null; draw(); controls(); };
+  last.oninput = clearClip;
+  el("mr-motion").onclick = async () => {
+    if (!picture || selected !== position.valueAsNumber || !last.reportValidity()) return;
+    const seq = generation, end = last.valueAsNumber + 1;
+    if (!Number.isInteger(end)) { status("请先填写片段末帧。"); return; }
+    try {
+      const review = await call("motion", {frame:selected, end_frame:end});
+      if (seq !== generation || last.valueAsNumber + 1 !== end || selected !== position.valueAsNumber) return;
+      const bytes = Uint8Array.from(atob(review.gif), c => c.charCodeAt(0));
+      clearClip(); clip.src = URL.createObjectURL(new Blob([bytes], {type:"image/gif"})); clip.hidden = false;
+    } catch (error) { if (seq === generation) status(error.message); }
+  };
   el("mr-locate").onclick = () => locate();
   placement.onchange = () => locate();
-  position.oninput = note.oninput = controls;
+  position.oninput = () => { clearClip(); controls(); };
+  note.oninput = controls;
   panel.ontoggle = () => { if (panel.open && spec && !picture && !busy) locate(); };
   el("mr-save").onclick = async () => {
     if (el("mr-save").disabled) return;
     const seq = generation;
     const annotation = {frame:selected, note:note.value.trim(), ...(region ? {region} : {})};
+    if (last.value !== "") {
+      if (!last.reportValidity()) return;
+      if (region) { status("请先清除单帧选区，再保存帧段意见。"); return; }
+      annotation.end_frame = last.valueAsNumber + 1;
+    }
     busy = true; controls();
     try {
       const result = await call("save",{annotation});

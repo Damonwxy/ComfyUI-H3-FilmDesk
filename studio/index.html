@@ -208,6 +208,9 @@
             <option value="youtube-vertical-2026-11-20">YouTube 竖屏广告参考区</option></select></label>
           <label>成片帧号<input id="mr-frame" type="number" min="0" step="1" value="0"></label>
           <button type="button" id="mr-locate">查看此帧</button>
+          <label>片段末帧（含，可选）<input id="mr-last" type="number" min="0" step="1"></label>
+          <button type="button" id="mr-motion">播放选段</button>
+          <img id="mr-clip" alt="当前母版的无声运动预览" hidden>
         </div>
         <div class="region-editor"><canvas id="mr-picture" tabindex="0" aria-label="母版选区，点两个对角或用方向键移动并按回车定点" hidden></canvas></div>
         <p id="mr-status" role="status"></p>

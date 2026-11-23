@@ -491,7 +491,7 @@ async def studio(request):
                     "project-plan.mjs", "frame-region.mjs", "compare-cut.mjs", "master-review.mjs"}:
         return _err(404, "页面不存在")
     headers = {
-        "Content-Security-Policy": "default-src 'self'; object-src 'none'; base-uri 'none'; media-src 'self' blob:",
+        "Content-Security-Policy": "default-src 'self'; object-src 'none'; base-uri 'none'; img-src 'self' blob:; media-src 'self' blob:",
         "Cache-Control": "no-cache",
     }
     if name.endswith((".js", ".mjs")):
@@ -540,7 +540,7 @@ def register_project_routes(app, table, *, jobs, input_directory, generation_ena
     table.get("/localhub/v2/deliveries/subtitles.srt")(e_subtitles)
     table.post("/localhub/v2/deliveries/master-check")(e_master_check)
     table.get("/localhub/v2/deliveries/master-review")(e_master_review)
-    table.post("/localhub/v2/deliveries/master-review/{action:read|frame|save|followup|artwork}")(e_master_review)
+    table.post("/localhub/v2/deliveries/master-review/{action:read|frame|motion|save|followup|artwork}")(e_master_review)
     table.get("/localhub/v2/ad-copy")(e_copy)
     table.post("/localhub/v2/ad-copy")(e_copy)
     table.put("/localhub/v2/ad-copy")(e_copy)
