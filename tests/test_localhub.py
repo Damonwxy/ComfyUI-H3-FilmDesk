@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import hashlib
 import json
 import os
 import shutil
@@ -12,6 +13,7 @@ import wave
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
+from uuid import uuid4
 from zipfile import ZipFile
 
 from aiohttp import ClientConnectionError
@@ -304,6 +306,59 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "缺失"):
             plan_cut(offline, "fixture", 2, "E1")
 
+    def test_inherit_generation_settings_only_from_exact_completed_shot(self):
+        from localhub_preflight import inherit_shot_settings
+
+        binding = {"revision": 5, "shot_id": "orbit"}
+        digest = hashlib.sha256(b"depth fixture").hexdigest()
+        control = self.root / ("localhub_" + digest + ".mp4")
+        original = self.root / "depth-original.mp4"
+        for path in (control, original):
+            path.write_bytes(b"depth fixture")
+
+        info = {
+            "planned_shot": binding, "width": 576, "height": 1024, "seed": 123,
+            "controlnet": {"control_video": str(original), "strength": 0.82,
+                           "start_percent": 0, "end_percent": 0.86},
+            "references": [{"role": "control", "input": control.name}],
+        }
+
+        def record(project, receipt, created, state="completed", imported=False):
+            job_id = str(uuid4())
+            prompt_id = f"file:{job_id}" if imported else str(uuid4())
+            with self.store.db() as db:
+                db.execute(
+                    """INSERT INTO jobs(id,prompt_id,project,shot,kind,intent,graph,info,state,created,updated)
+                       VALUES(?,?,?,'环绕','video','[]','{}',?,?,?,?)""",
+                    (job_id, prompt_id, project, json.dumps(receipt), state, created, created),
+                )
+            return job_id
+
+        expected_job = record("fixture", info, 1)
+        record("fixture", dict(info, width=896, planned_shot=dict(binding, revision=6)), 2)
+        record("fixture", dict(info, width=896, planned_shot=dict(binding, shot_id="other")), 3)
+        record("other", dict(info, width=896), 4)
+        record("fixture", dict(info, width=896), 5, state="failed")
+        record("fixture", dict(info, width=896), 6, imported=True)
+
+        def inherit(options, requested=binding):
+            return inherit_shot_settings(self.store, "fixture", "环绕", requested, options, self.root)
+
+        defaults, origin = inherit({})
+        self.assertEqual(defaults, {"width": 576, "height": 1024, "control_video": str(control),
+                                   "control_strength": 0.82, "control_start": 0, "control_end": 0.86})
+        self.assertEqual(origin, {"job_id": expected_job, "fields": sorted(defaults)})
+        self.assertEqual(inherit({"width": 640, "control_video": None})[0], {"height": 1024})
+        self.assertEqual(inherit({"control_strength": 0.0})[0],
+                         {key: value for key, value in defaults.items() if key != "control_strength"})
+        self.assertEqual(inherit({}, dict(binding, revision=4)), ({}, None))
+        control.unlink()
+        self.assertEqual(inherit({})[0]["control_video"], str(original))
+        control.write_bytes(b"wrong snapshot")
+        with self.assertRaisesRegex(ValueError, "控制片缺失或已变动"):
+            inherit({})
+        self.assertEqual(inherit({"control_video": None})[0], {"width": 576, "height": 1024})
+
     def test_take_choice_checks_reviewed_files_and_preserves_other_clip_occurrences(self):
         media = []
         for name in ("A", "B"):
@@ -342,6 +397,19 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         first, second = read_edit(self.store, "ad", 2)["timeline"]["tracks"][0]["clips"]
         self.assertEqual(first, clip)
         self.assertEqual(second, dict(job_id=media[1], file_index=0, start_frame=6, duration_frames=18, rate="48000/1001"))
+
+    def test_mcp_master_motion_accepts_both_forms_of_comparison_binding(self):
+        import studio_mcp
+
+        scope = {"project": "ad", "master": {"job_id": "master", "file_index": 0}}
+        binding = json.dumps(scope, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+        with patch.object(studio_mcp, "bridge", return_value={"review": {"gif": "R0lGODlh"}}) as bridge:
+            for comparison in (binding, scope):
+                displayed = studio_mcp.localhub_read_master_motion("ad", binding, 176, 192, comparison, 82)
+                self.assertEqual(displayed.mimeType, "image/gif")
+                self.assertEqual(bridge.call_args.args[2]["compare"], {"binding": binding, "frame": 82})
+            with self.assertRaisesRegex(ValueError, "对应起帧"):
+                studio_mcp.localhub_read_master_motion("ad", binding, 176, 192, scope)
 
     async def test_master_notes_survive_reopen_and_are_scoped_to_exact_review(self):
         row = await self.accept()

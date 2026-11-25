@@ -12,9 +12,53 @@ from pathlib import Path
 from ffmpeg_tools import locate_ffmpeg, locate_ffprobe
 from h3_graph import build_control_video_graph, build_h3_graph
 from localhub_jobs import RequestConflict
+from localhub_media import media_sha256
 
 
 _TAG = re.compile(r"<\s*(?:Picture|Video|Audio)\b[^<>]*>", re.IGNORECASE)
+_CONTROL_SNAPSHOT = re.compile(r"localhub_([0-9a-f]{64})\.(?:mp4|mov|mkv|webm|avi)")
+
+
+def _previous_control(info, input_directory):
+    ref = next((ref for ref in info.get("references", []) if ref.get("role") == "control"), {})
+    name = ref.get("input", "")
+    snapshot = _CONTROL_SNAPSHOT.fullmatch(name)
+    if snapshot:
+        staged = Path(input_directory) / name
+        source = info["controlnet"].get("control_video")
+        path = Path(source) if not staged.exists() and source else staged
+        if path.is_file() and media_sha256(path) == snapshot[1]:
+            return str(path)
+    raise ValueError("上次的控制片缺失或已变动，请重新指定控制片或明确关闭控制")
+
+
+def inherit_shot_settings(jobs, project, shot, binding, options, input_directory):
+    """Fill omitted size and depth fields from the last completed run of this saved shot."""
+    if all(key in options for key in ("width", "height", "control_video")):
+        return {}, None
+    with jobs.db() as db:
+        rows = db.execute(
+            """SELECT id, info FROM jobs
+               WHERE project=? AND shot=? AND kind='video' AND state='completed'
+               AND prompt_id NOT LIKE 'file:%' ORDER BY created DESC, id DESC""",
+            (project, shot),
+        )
+        for row in rows:
+            info = json.loads(row["info"])
+            if info.get("planned_shot") == binding:
+                job_id = row["id"]
+                break
+        else:
+            return {}, None
+
+    defaults = {key: info[key] for key in ("width", "height") if key in info}
+    control = info.get("controlnet")
+    if control and "control_video" not in options:
+        defaults.update(control_video=_previous_control(info, input_directory),
+                        control_strength=control["strength"],
+                        control_start=control["start_percent"], control_end=control["end_percent"])
+    inherited = {key: value for key, value in defaults.items() if key not in options}
+    return inherited, {"job_id": job_id, "fields": sorted(inherited)} if inherited else None
 
 
 def _video_range(ref, limit):

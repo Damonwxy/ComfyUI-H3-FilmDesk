@@ -124,6 +124,10 @@ def localhub_draft_plan_cut(project: str, revision: int, episode: str | None = N
 def localhub_preflight_shot(project: str, revision: int, shot_id: str, params: dict | None = None) -> dict:
     """Prepare a saved script shot with H3. Optional params include size, a decimal seed and extra references.
 
+    Omitted size and depth settings are inherited from the most recent completed run of this exact
+    plan revision and shot. Set control_video to null explicitly to run without motion control.
+    The preflight receipt identifies any inherited settings and fixes them for submission.
+
     Video ranges use zero-based frames on the prepared 24 fps stream; end_frame is exclusive.
     Pass control_video for a local depth or edge clip. control_range reports original frame indices,
     repeated and dropped frames. Optional control_strength, control_start and control_end configure the patch.
@@ -309,13 +313,26 @@ def localhub_link_review_artwork(project: str, source_binding: str, annotation: 
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
-def localhub_read_master_motion(project: str, binding: str, frame: int, end_frame: int,
-                                compare_binding: str | None = None, compare_frame: int | None = None) -> ImageContent:
-    """View up to 96 consecutive silent master frames in chat. End frame is exclusive."""
+def localhub_read_master_motion(
+    project: str,
+    binding: str,
+    frame: int,
+    end_frame: int,
+    compare_binding: str | dict[str, object] | None = None,
+    compare_frame: int | None = None,
+) -> ImageContent:
+    """View up to 96 consecutive silent master frames in chat. End frame is exclusive.
+
+    The comparison binding may be a JSON string or a decoded object.
+    """
     spec = dict(review_scope(project, binding), frame=frame, end_frame=end_frame)
     if compare_binding is not None or compare_frame is not None:
         if not compare_binding or compare_frame is None:
             raise ValueError("同步对照需要另一份母版回执与对应起帧")
+        if isinstance(compare_binding, dict):
+            compare_binding = json.dumps(
+                compare_binding, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+            )
         spec["compare"] = dict(binding=compare_binding, frame=compare_frame)
     result = bridge("deliveries/master-review/motion", project, spec, method="POST", timeout=150)
     return ImageContent(type="image", mimeType="image/gif", data=result["review"]["gif"])
