@@ -1356,6 +1356,14 @@ function preparePlannedGeneration(revision, rate, shot) {
   const fields = form.elements;
   for (const key of ["ref_images", "ref_videos", "ref_audios", "control_video", "take_start", "take_end"]) fields[key].value = "";
   fields.control_strength.value = fields.control_strength.defaultValue;
+  fields.disable_control.checked = false;
+  el("planned-control-toggle").hidden = false;
+  for (const key of ["width", "height"]) {
+    fields[key].value = "";
+    fields[key].required = false;
+    fields[key].placeholder = "沿用同版同镜设置";
+  }
+  el("aspect").value = "";
   el("registered-reference").value = "";
   el("reference-role").value = "reference";
   fields.shot.value = shot.title;
@@ -1374,7 +1382,15 @@ function preparePlannedGeneration(revision, rate, shot) {
 function clearPlannedGeneration() {
   plannedGeneration = null;
   el("planned-generation").hidden = true;
-  for (const key of ["shot", "prompt", "duration_s"]) el("generate").elements[key].readOnly = false;
+  el("planned-control-toggle").hidden = true;
+  const fields = el("generate").elements;
+  fields.disable_control.checked = false;
+  for (const key of ["shot", "prompt", "duration_s"]) fields[key].readOnly = false;
+  for (const key of ["width", "height"]) {
+    fields[key].required = true;
+    fields[key].placeholder = "";
+    if (!fields[key].value) fields[key].value = fields[key].defaultValue;
+  }
   updateReferenceRole();
   resetPreflight();
 }
@@ -1385,11 +1401,14 @@ function generationDraft(form) {
   const fields = new FormData(form);
   const lines = (name) => (fields.get(name) || "").split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
   const params = {
-    prompt: fields.get("prompt"), width: Number(fields.get("width")), height: Number(fields.get("height")),
+    prompt: fields.get("prompt"),
     duration_s: Number(fields.get("duration_s")), seed: null,
     ref_images: lines("ref_images"), ref_audios: lines("ref_audios"),
     ref_videos: lines("ref_videos").map((path) => ({ path, include_audio: fields.has("video_audio") })),
   };
+  for (const key of ["width", "height"]) {
+    if (fields.get(key) !== "") params[key] = Number(fields.get(key));
+  }
   if (fields.get("registered_reference")) {
     const [asset_id, revision] = JSON.parse(fields.get("registered_reference"));
     const reference = { asset_id, revision };
@@ -1401,7 +1420,9 @@ function generationDraft(form) {
     }
   }
   const controlVideo = fields.get("control_video").trim();
-  if (controlVideo) {
+  if (plannedGeneration && fields.has("disable_control")) {
+    params.control_video = null;
+  } else if (controlVideo) {
     params.control_video = controlVideo;
     params.control_strength = Number(fields.get("control_strength") || 1);
   }
@@ -1449,6 +1470,18 @@ function renderPlan(info, previews = []) {
     + info.frames + " 帧（" + info.duration_s + " 秒） · 取用 [" + take.start_frame + ", " + take.end_frame + ")"));
   panel.append(node("p", [info.models.unet, info.models.lora].filter(Boolean).join(" · "), "quiet"));
   if (info.planned_shot) panel.append(node("p", "项目编排 v" + info.planned_shot.revision, "quiet"));
+  const inherited = info.preflight.inherited_settings;
+  if (inherited) {
+    const labels = { width: "宽度", height: "高度", control_video: "控制片", control_strength: "强度",
+      control_start: "采样起点", control_end: "采样终点" };
+    panel.append(node("p", "沿用同版同镜任务 " + inherited.job_id + " · "
+      + inherited.fields.map(key => labels[key] || key).join("、"), "quiet"));
+  }
+  if (info.controlnet) {
+    const control = info.controlnet;
+    panel.append(node("p", "运动控制 · 强度 " + control.strength + " · 采样 "
+      + control.start_percent + "–" + control.end_percent));
+  }
   const plan = info.preflight.reference_plan;
   if (plan) {
     for (const [label, text] of [["动作", plan.action], ["入镜", plan.entry], ["出镜", plan.exit]]) {
@@ -1499,19 +1532,23 @@ el("generate").addEventListener("submit", async (event) => {
   const body = generationDraft(form);
   const draft = JSON.stringify(body);
   const pending = JSON.parse(sessionStorage.getItem("localhub.pending") || "null");
-  if (pending?.draft === draft && pending.body) body.params.seed = pending.body.params.seed;
+  if (pending?.draft === draft && pending.body) body.params = pending.body.params;
   const preview = el("preflight");
   resetPreflight();
   preview.disabled = true;
   el("preflight-result").textContent = "正在检查镜头和参考素材…";
   try {
-    const { info, reference_previews } = await send(api + "/video/preflight", "POST",
+    const { info, reference_previews, submission } = await send(api + "/video/preflight", "POST",
       { ...body, preview_reference_ends: true });
     if (draft !== JSON.stringify(generationDraft(form))) return;
-    body.params.seed = info.seed;
-    body.take = info.preflight.take;
-    body.plan_sha256 = info.preflight.plan_sha256;
-    approvedDraft = { body, draft };
+    const prepared = submission?.body ?? {
+      ...body,
+      params: { ...body.params, seed: info.seed },
+      take: info.preflight.take,
+      plan_sha256: info.preflight.plan_sha256,
+    };
+    const retry = pending?.draft === draft && pending.body?.plan_sha256 === prepared.plan_sha256;
+    approvedDraft = { body: retry ? pending.body : prepared, draft };
     renderPlan(info, reference_previews);
     el("confirm-generate").disabled = false;
   } catch (error) {

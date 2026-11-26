@@ -20,7 +20,7 @@ import h3_graph
 import canvas_store
 import ffmpeg_tools
 from localhub_jobs import FINAL, Jobs, RequestConflict, observe_native
-from localhub_preflight import compile_plan, confirm_plan
+from localhub_preflight import compile_plan, confirm_plan, inherit_shot_settings
 from localhub_media import video_frame_png
 from localhub_project_http import _body, _err, _label, _ok, register_project_routes
 from localhub_project_plan import bind_h3_shot
@@ -247,11 +247,18 @@ async def v_preflight(request):
         if not isinstance(p, dict) or not isinstance(p.get("params"), dict):
             raise ValueError("params 须为对象")
         project = _label(p.get("project"), "project", "本地项目")
-        binding, params, take = None, p["params"], p.get("take")
+        binding, take = None, p.get("take")
+        options = params = p["params"]
         reference_plan = {}
+        inherited = None
         if "plan_shot" in p:
-            shot, params, take, binding = bind_h3_shot(_jobs(), project, p["plan_shot"], params, take,
+            service = _jobs()
+            shot, params, take, binding = bind_h3_shot(service, project, p["plan_shot"], params, take,
                                                        reference_plan=reference_plan)
+            defaults, inherited = await asyncio.to_thread(
+                inherit_shot_settings, service, project, shot, binding, options, folder_paths.get_input_directory(),
+            )
+            options, params = defaults | options, defaults | params
         else:
             shot = _label(p.get("shot"), "shot")
         graph, info = await asyncio.to_thread(
@@ -269,6 +276,8 @@ async def v_preflight(request):
             if review:
                 info["preflight"]["warnings"].append("编排中仅供审片的引用：" + "、".join(review)
                                                       + "。模型实际接收的素材见输入清单。")
+        if inherited:
+            info["preflight"]["inherited_settings"] = inherited
         previews = []
         if p.get("preview_reference_ends") is True:
             inputs = {ref["tag"]: ref for ref in info["references"]}
@@ -290,7 +299,7 @@ async def v_preflight(request):
         result["submission"] = {
             "key": str(uuid4()),
             "body": {"project": project, "kind": "video", "plan_shot": binding,
-                     "params": dict(p["params"], seed=str(info["seed"])), "take": info["preflight"]["take"],
+                     "params": dict(options, seed=str(info["seed"])), "take": info["preflight"]["take"],
                      "plan_sha256": info["preflight"]["plan_sha256"]},
         }
     return _ok(result)
