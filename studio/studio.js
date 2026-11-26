@@ -1541,10 +1541,12 @@ el("generate").addEventListener("submit", async (event) => {
     const { info, reference_previews, submission } = await send(api + "/video/preflight", "POST",
       { ...body, preview_reference_ends: true });
     if (draft !== JSON.stringify(generationDraft(form))) return;
-    body.params.seed = info.seed;
-    body.take = info.preflight.take;
-    body.plan_sha256 = info.preflight.plan_sha256;
-    const prepared = submission?.body ?? body;
+    const prepared = submission?.body ?? {
+      ...body,
+      params: { ...body.params, seed: info.seed },
+      take: info.preflight.take,
+      plan_sha256: info.preflight.plan_sha256,
+    };
     const retry = pending?.draft === draft && pending.body?.plan_sha256 === prepared.plan_sha256;
     approvedDraft = { body: retry ? pending.body : prepared, draft };
     renderPlan(info, reference_previews);
